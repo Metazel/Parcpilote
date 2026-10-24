@@ -102,18 +102,21 @@ def overpass_grid() -> dict:
 
 
 def tile_png() -> bytes:
-    import io
+    """A 256 px grey grid map tile, encoded with the standard library only (no image dependency)."""
+    import struct
+    import zlib
 
-    from PIL import Image, ImageDraw
+    size, ground, line = 256, b"\xe8\xec\xe4", b"\xd2\xd6\xce"
+    rows = []
+    for y in range(size):
+        px = b"".join(line if (y % 32 == 0 or x % 32 == 0) else ground for x in range(size))
+        rows.append(b"\x00" + px)  # filter type 0 per scanline
 
-    img = Image.new("RGB", (256, 256), (232, 236, 228))
-    d = ImageDraw.Draw(img)
-    for k in range(0, 256, 32):
-        d.line([(k, 0), (k, 256)], fill=(210, 214, 206))
-        d.line([(0, k), (256, k)], fill=(210, 214, 206))
-    buf = io.BytesIO()
-    img.save(buf, "PNG")
-    return buf.getvalue()
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+    header = struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0)  # 8-bit RGB
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(b"".join(rows), 9)) + chunk(b"IEND", b"")
 
 
 TILE = tile_png()
