@@ -1,3 +1,3 @@
 # Recette navigateur (e2e/run_e2e.py). Versions figées ; Dependabot propose les mises à jour.
 playwright==1.63.0
-pillow==12.3.0
+pillow==13.0.0
