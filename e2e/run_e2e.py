@@ -428,7 +428,8 @@ def run_map(browser: Browser) -> None:
         set_priority(page, "Peter Pan's Flight", "Incontournable")
         tab(page, "Carte")
         expect(page.locator(".map-note")).to_be_visible()
-        assert page.locator("path.map-footway").count() > 100
+        # Footways are drawn once the walking network is loaded: wait for them, do not race.
+        page.wait_for_function("document.querySelectorAll('path.map-footway').length > 100")
         expect(page.locator("path.route-next")).to_have_count(1)
         shot(page, "10-carte-sans-fond")
 
@@ -511,6 +512,93 @@ def run_a11y(browser: Browser) -> None:
         ctx.close()
 
 
+def run_easy(browser: Browser) -> None:
+    """Carte Facilité, group beyond the card party, repeated rides (group of 7 with a child)."""
+    axe = Path(os.environ.get("AXE_PATH", ROOT / "node_modules/axe-core/axe.min.js")).read_text()
+    ctx, page, errors = new_page(browser, bypass_csp=True)
+    state: dict[str, str] = {}
+
+    @scenario("Carte Facilité : groupe de 7, les 2 hors carte en Single Rider")
+    def e1():
+        page.goto(URL)
+        expect(page.get_by_role("heading", name="Votre groupe")).to_be_visible()
+        page.get_by_label("Nombre de personnes").fill("7")
+        page.get_by_label("Il y a un enfant dans le groupe").check()
+        page.get_by_label("Taille du plus petit (cm)").fill("110")
+        sr = page.get_by_label(re.compile("Single Rider"))
+        expect(sr).to_be_disabled()
+        page.get_by_label("Une personne a la Carte Facilité (ALD)").check()
+        expect(page.get_by_text("Les 2 autres personnes font chaque attraction de leur côté")).to_be_visible()
+        sr = page.get_by_label("Les 2 personnes hors carte acceptent la file Single Rider")
+        expect(sr).to_be_enabled()
+        sr.check()
+        page.get_by_role("group", name="Parc de départ").get_by_role("radio", name="Adventure World").check()
+        page.get_by_role("button", name="Commencer la visite").click()
+        expect(page.get_by_role("heading", name="Ma liste")).to_be_visible()
+
+    @scenario("Ma liste : nombre de fois par attraction")
+    def e2():
+        for ride in ["Spider-Man W.E.B. Adventure", "Ratatouille : L’Aventure Totalement Toquée de Rémy"]:
+            set_priority(page, ride, "Incontournable")
+        for ride in ["Cars Road Trip", "Rapunzel Tangled Spin", "Cars Quatre Roues Rallye", "Slinky Dog Zigzag Spin"]:
+            set_priority(page, ride, "Si possible")
+        spidey = page.get_by_role("group", name="Spider-Man W.E.B. Adventure")
+        spidey.get_by_label("Nombre de fois aujourd'hui").select_option("3")
+        expect(spidey.get_by_label("Nombre de fois aujourd'hui")).to_have_value("3")
+        # Not offered until the ride is in the list.
+        expect(page.get_by_role("group", name="Crush's Coaster").get_by_label("Nombre de fois aujourd'hui")).to_have_count(0)
+
+    @scenario("Maintenant : inscription Carte Facilité et heure de retour donnée")
+    def e3():
+        tab(page, "Maintenant")
+        expect(page.locator(".sign-kind")).to_contain_text("inscription carte facilité")
+        state["ride"] = sign_title(page)
+        expect(page.locator(".sign")).to_contain_text("Présentez la Carte Facilité à l'entrée Premier Access")
+        shot(page, "easy-01-inscription")
+        # Prefilled with the forecast return time; the user types the one actually given.
+        expect(page.get_by_label("Heure de retour donnée")).to_have_value(re.compile(r"^1\d:\d{2}$"))
+        page.get_by_label("Heure de retour donnée").fill("10:50")
+        page.get_by_role("button", name="Inscription faite").click()
+        panel = page.get_by_role("region", name=f"Carte Facilité : {state['ride']}")
+        expect(panel).to_contain_text("Retour à partir de 10:50")
+        expect(page.locator(".sign-kind")).not_to_contain_text("inscription")
+        shot(page, "easy-02-apres-inscription")
+
+    @scenario("Plan : retour avec la carte, répétitions numérotées, consignes hors carte")
+    def e4():
+        tab(page, "Plan")
+        card_stop = page.locator(".stop.ride", has_text=state["ride"]).filter(has_text="Carte Facilité").first
+        expect(card_stop).to_be_visible()
+        meta = card_stop.locator(".stop-meta").first.inner_text()
+        m = re.search(r"embarquement (\d{2}):(\d{2})", meta)
+        assert m and int(m[1]) * 60 + int(m[2]) >= 10 * 60 + 50, meta
+        expect(page.locator(".stop-name", has_text="Spider-Man W.E.B. Adventure (2e fois)")).to_be_visible()
+        expect(page.locator(".stop-name", has_text="Spider-Man W.E.B. Adventure (3e fois)")).to_be_visible()
+        expect(page.locator(".stop-meta", has_text="Hors carte (2)").first).to_be_visible()
+        shot(page, "easy-03-plan")
+
+    @scenario("Carte Facilité et sous-groupes : accessibilité axe-core (clair et sombre)")
+    def e5():
+        problems = []
+        for scheme in ("light", "dark"):
+            page.emulate_media(color_scheme=scheme)
+            for name in ("Maintenant", "Plan", "Ma liste", "Groupe"):
+                tab(page, name)
+                page.wait_for_timeout(150)
+                page.add_script_tag(content=axe)
+                res = page.evaluate("axe.run(document, { runOnly: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'] })")
+                for v in res["violations"]:
+                    if v["impact"] in ("serious", "critical"):
+                        problems.append(f"{scheme}/{name}: {v['id']} ({len(v['nodes'])}) {v['nodes'][0]['target']}")
+        assert not problems, " | ".join(problems)
+
+    for s in (e1, e2, e3, e4, e5):
+        s()
+    console_errors = [e for e in errors if "Failed to load resource" not in e]
+    results.append(("Aucune erreur JavaScript (Carte Facilité)", not console_errors, "; ".join(console_errors)[:300] or "ok"))
+    ctx.close()
+
+
 def run_single(browser: Browser) -> None:
     ctx = browser.new_context(**PHONE)
     page = ctx.new_page()
@@ -587,7 +675,7 @@ def main() -> int:
         with sync_playwright() as p:
             # --disable-dev-shm-usage: CI containers often have a tiny /dev/shm.
             browser = p.chromium.launch(args=["--disable-dev-shm-usage"])
-            for suite in (run, run_security, run_live, run_map, run_a11y, run_single):
+            for suite in (run, run_security, run_live, run_map, run_a11y, run_easy, run_single):
                 flaky += run_suite(suite, browser)
             browser.close()
     finally:

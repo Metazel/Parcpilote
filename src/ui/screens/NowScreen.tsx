@@ -3,7 +3,7 @@ import { MINUTE, formatHM, parkWallTime } from '../../domain/time';
 import type { PlanStep } from '../../domain/types';
 import { useAppState, useStore } from '../context';
 import type { Tab } from '../context';
-import { PARK_SHORT, QUEUE_LABEL, STEP_LABEL, euros, inMinutes, minutes } from '../format';
+import { PARK_SHORT, QUEUE_LABEL, STEP_LABEL, euros, inMinutes, minutes, stepTitle } from '../format';
 
 interface Props {
   readonly go: (tab: Tab) => void;
@@ -23,12 +23,65 @@ function doneLabel(step: PlanStep): string {
   }
 }
 
+/** What the members outside the Carte Facilité party do. */
+function OthersNote({ step }: { step: PlanStep }) {
+  const o = step.others;
+  if (!o) return null;
+  const who = o.count === 1 ? 'La personne hors carte' : `Les ${o.count} personnes hors carte`;
+  return (
+    <p class="party-note">
+      {o.rides
+        ? `${who} : ${QUEUE_LABEL[o.queue]}, environ ${minutes(o.waitMin)} d'attente. Retrouvailles à la sortie vers ${formatHM(step.endAt)}.`
+        : `${who} : pas de file assez rapide ici. Pause ou attraction voisine, retrouvailles à la sortie vers ${formatHM(step.endAt)}.`}
+    </p>
+  );
+}
+
+/** Registration step: the holder gets a return time; the user records the one actually given. */
+function EasyAccessForm({ step }: { step: PlanStep }) {
+  const store = useStore();
+  const { now } = useAppState();
+  const [time, setTime] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const submit = (e: Event) => {
+    e.preventDefault();
+    const m = /^(\d{2}):(\d{2})$/.exec(time || formatHM(step.returnAt ?? now));
+    if (!m || Number(m[1]) > 23 || Number(m[2]) > 59) {
+      setError('Indiquez l’heure de retour donnée par le Cast Member.');
+      return;
+    }
+    if (!store.registerEasyAccess(step.targetId, parkWallTime(now, Number(m[1]) * 60 + Number(m[2])))) {
+      setError('Heure de retour invalide : elle doit être dans les prochaines heures.');
+      return;
+    }
+    setError(null);
+  };
+  return (
+    <form onSubmit={submit} noValidate>
+      <div class="field">
+        <label for="easy-return">Heure de retour donnée</label>
+        <input id="easy-return" type="time" value={time || formatHM(step.returnAt ?? now)} onInput={(e) => setTime((e.target as HTMLInputElement).value)} />
+      </div>
+      {error && (
+        <p role="alert" class="queue-note">
+          {error}
+        </p>
+      )}
+      <button class="btn btn-primary" type="submit">
+        Inscription faite
+      </button>
+    </form>
+  );
+}
+
 function NextSign({ step, now, report, go }: { step: PlanStep; now: number; report: (id: string) => void; go: (tab: Tab) => void }) {
   const store = useStore();
   const state = useAppState();
   const place = step.targetId ? state.catalog.get(step.targetId) : undefined;
   const timed = step.latestDepartAt !== null && step.kind !== 'lunch';
   const late = timed && step.latestDepartAt! < now;
+  const booking = step.kind === 'easy-book';
+  const held = state.persisted.day.easyAccess;
 
   return (
     <section class={`sign ${step.position.park}`} aria-labelledby="next-title">
@@ -37,7 +90,7 @@ function NextSign({ step, now, report, go }: { step: PlanStep; now: number; repo
         {step.kind !== 'lunch' && step.departAt > now + MINUTE ? `, départ ${inMinutes(step.departAt, now)}` : ''}
       </p>
       <h1 id="next-title" class="sign-title">
-        {step.name}
+        {stepTitle(step)}
       </h1>
       <p class="sign-where">
         {step.kind === 'lunch' ? 'Où vous voulez, près de votre position' : `${place?.land ?? ''}, ${PARK_SHORT[step.position.park]}`}
@@ -58,6 +111,21 @@ function NextSign({ step, now, report, go }: { step: PlanStep; now: number; repo
               <dd>{formatHM(step.latestDepartAt ?? step.startAt)}</dd>
             </div>
           </>
+        ) : booking ? (
+          <>
+            <div>
+              <dt>de marche</dt>
+              <dd>{minutes(step.walkMin)}</dd>
+            </div>
+            <div>
+              <dt>retour prévu</dt>
+              <dd>{formatHM(step.returnAt ?? step.endAt)}</dd>
+            </div>
+            <div>
+              <dt>arrivée</dt>
+              <dd>{formatHM(step.arriveAt)}</dd>
+            </div>
+          </>
         ) : (
           <>
             <div>
@@ -75,17 +143,32 @@ function NextSign({ step, now, report, go }: { step: PlanStep; now: number; repo
           </>
         )}
       </dl>
-      {step.queue && step.queue !== 'standby' && (
+      {booking && (
+        <p class="queue-note">
+          Présentez la Carte Facilité à l'entrée Premier Access pour obtenir l'heure de retour. En attendant, le plan enchaîne d'autres attractions en file normale.
+        </p>
+      )}
+      {step.queue === 'easy' && (
+        <p class="queue-note">
+          Passez par l'{QUEUE_LABEL.easy}
+          {held && held.rideId === step.targetId ? `, à partir de ${formatHM(held.returnAt)}.` : '.'}
+        </p>
+      )}
+      {step.queue && step.queue !== 'standby' && step.queue !== 'easy' && (
         <p class="queue-note">
           Prenez la {QUEUE_LABEL[step.queue]}
           {step.queue === 'single' ? ' : vous serez séparés, retrouvez-vous à la sortie.' : '.'}
         </p>
       )}
+      <OthersNote step={step} />
       {late && <p class="queue-note">Départ conseillé dépassé : y aller maintenant reste possible si vous vous pressez.</p>}
+      {booking && <EasyAccessForm step={step} />}
       <div class="row">
-        <button class="btn btn-primary" type="button" onClick={() => store.completeStep(step)}>
-          {doneLabel(step)}
-        </button>
+        {!booking && (
+          <button class="btn btn-primary" type="button" onClick={() => store.completeStep(step)}>
+            {doneLabel(step)}
+          </button>
+        )}
         <button class="btn" type="button" onClick={() => store.skip(step.targetId)}>
           Passer
         </button>
@@ -180,6 +263,27 @@ function PremierAccessAdvice() {
   );
 }
 
+/** The registration currently held, with a way to drop it. */
+function EasyAccessHeld() {
+  const store = useStore();
+  const { persisted, catalog, now } = useAppState();
+  const held = persisted.day.easyAccess;
+  if (!held || !persisted.profile?.easyAccess) return null;
+  const name = catalog.get(held.rideId)?.name ?? held.rideId;
+  return (
+    <section class="panel" aria-labelledby="easy-title">
+      <h3 id="easy-title">Carte Facilité : {name}</h3>
+      <p>
+        {held.returnAt > now ? `Retour à partir de ${formatHM(held.returnAt)} (${inMinutes(held.returnAt, now)}).` : `Accessible depuis ${formatHM(held.returnAt)}.`} Pas d'autre inscription
+        possible d'ici là.
+      </p>
+      <button class="btn btn-quiet btn-small" type="button" onClick={() => store.cancelEasyAccess()}>
+        Annuler l'inscription
+      </button>
+    </section>
+  );
+}
+
 export function NowScreen({ go, report }: Props) {
   const store = useStore();
   const state = useAppState();
@@ -236,15 +340,17 @@ export function NowScreen({ go, report }: Props) {
         </div>
       )}
 
+      <EasyAccessHeld />
+
       <PremierAccessAdvice />
 
       {rest.length > 0 && (
         <section class="panel" aria-labelledby="then-title">
           <h3 id="then-title">Ensuite</h3>
           <ol class="reasons">
-            {rest.slice(0, 3).map((s) => (
-              <li key={`${s.kind}:${s.targetId}`}>
-                <span>{s.name}</span>
+            {rest.slice(0, 3).map((s, i) => (
+              <li key={`${s.kind}:${s.targetId}:${i}`}>
+                <span>{s.kind === 'easy-book' ? `Inscription Carte Facilité : ${s.name}` : stepTitle(s)}</span>
                 <span class="num muted">{formatHM(s.kind === 'ride' || s.kind === 'pa' ? s.arriveAt : s.startAt)}</span>
               </li>
             ))}

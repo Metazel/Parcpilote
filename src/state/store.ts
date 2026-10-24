@@ -5,7 +5,7 @@ import { demoSnapshot } from '../data/demo';
 import { type FetchFn, LiveDataError, loadLive } from '../data/themeparks';
 import { DETOUR_FACTOR, type NetworkFn, PARK_ENTRANCES, haversineM, walkMinutes } from '../domain/geo';
 import { type Route, WalkGraph } from '../domain/walkGraph';
-import { computePlan } from '../domain/planner';
+import { MAX_REPEATS, computePlan, wantedRides } from '../domain/planner';
 import { type PaAdvice, advisePremierAccess, remainingBudgetCents } from '../domain/premierAccess';
 import { MINUTE, formatHM, parkDateKey, parkMinutesOfDay, parkWallTime } from '../domain/time';
 import type { GeoPoint, GroupProfile, LiveSnapshot, ParkId, Place, Plan, PlanStep, Poi, Position, Priority } from '../domain/types';
@@ -333,10 +333,17 @@ export class AppStore {
       return;
     }
     const { day } = persisted;
-    const done = new Set([...day.done, ...day.skipped]);
     const wishes = new Map<string, Priority>(persisted.wishes);
+    const repeats = new Map(Object.entries(persisted.repeats));
+    const doneCounts = new Map<string, number>();
+    for (const id of day.done) doneCounts.set(id, (doneCounts.get(id) ?? 0) + 1);
+    // Not to plan again: skipped, shows seen, rides done as many times as wished.
+    const done = new Set(day.skipped);
+    for (const [id, n] of doneCounts) {
+      if (catalog.get(id)?.kind !== 'ride' || n >= wantedRides({ repeats }, id)) done.add(id);
+    }
     const pos = this.currentPosition();
-    const prevFirst = this.state.plan?.steps[0];
+    const prevFirst = this.state.plan?.steps.find((s) => s.kind !== 'easy-book');
     const forcedNextId = this.state.forcedNextId && !done.has(this.state.forcedNextId) ? this.state.forcedNextId : undefined;
     const plan = computePlan({
       now,
@@ -346,11 +353,14 @@ export class AppStore {
       snapshot,
       profile,
       wishes,
+      repeats,
       shows: day.shows,
       paBookings: day.paBookings,
       done,
+      doneCounts,
       lunchDone: day.lunchDone,
       corrections: persisted.corrections,
+      easyAccessReservation: profile.easyAccess ? day.easyAccess : null,
       previousNextId: prevFirst?.kind === 'ride' ? prevFirst.targetId : undefined,
       forcedNextId,
       network: this.network(),
@@ -422,6 +432,11 @@ export class AppStore {
         this.pushAlert(`go:${first.targetId}:${first.startAt}`, 'warn', `Pars vers ${first.name} au plus tard à ${formatHM(first.latestDepartAt)}.`);
       }
     }
+    const resv = this.state.persisted.profile?.easyAccess ? this.state.persisted.day.easyAccess : null;
+    if (resv && now >= resv.returnAt) {
+      const name = this.state.catalog.get(resv.rideId)?.name ?? 'L’attraction';
+      this.pushAlert(`easy:${resv.rideId}:${resv.returnAt}`, 'info', `Carte Facilité : ${name} est accessible depuis ${formatHM(resv.returnAt)}.`);
+    }
     if (data.mode !== 'demo' && data.fetchedAt !== null && now - data.fetchedAt > STALE_AFTER_MS) {
       this.pushAlert(`stale:${data.fetchedAt}`, 'warn', `Données datant de ${formatHM(data.fetchedAt)} : prévisions moins fiables.`);
     }
@@ -438,7 +453,19 @@ export class AppStore {
     if (!this.state.catalog.has(id)) return;
     const wishes = this.state.persisted.wishes.filter(([w]) => w !== id);
     if (priority) wishes.push([id, priority]);
-    this.persist({ wishes });
+    const repeats = { ...this.state.persisted.repeats };
+    if (!priority) delete repeats[id];
+    this.persist({ wishes, repeats });
+    this.recompute();
+  }
+
+  /** Number of rides wanted today for an attraction (1 to MAX_REPEATS). */
+  setRepeat(id: string, count: number): void {
+    if (this.state.catalog.get(id)?.kind !== 'ride' || !Number.isInteger(count) || count < 1 || count > MAX_REPEATS) return;
+    const repeats = { ...this.state.persisted.repeats };
+    if (count === 1) delete repeats[id];
+    else repeats[id] = count;
+    this.persist({ repeats });
     this.recompute();
   }
 
@@ -458,15 +485,43 @@ export class AppStore {
 
   completeStep(step: PlanStep): void {
     const { day } = this.state.persisted;
+    if (step.kind === 'easy-book') {
+      if (step.returnAt !== null) this.registerEasyAccess(step.targetId, step.returnAt);
+      return;
+    }
     if (step.kind === 'lunch') {
       this.patchDay({ lunchDone: true });
     } else {
+      // Rides may be done several times a day; shows and Premier Access count once.
+      const repeatable = step.kind === 'ride';
       this.patchDay({
-        done: day.done.includes(step.targetId) ? day.done : [...day.done, step.targetId],
+        done: repeatable || !day.done.includes(step.targetId) ? [...day.done, step.targetId] : day.done,
         position: { lat: step.position.lat, lon: step.position.lon, park: step.position.park, key: step.targetId },
+        easyAccess: day.easyAccess?.rideId === step.targetId ? null : day.easyAccess,
+        paBookings: step.kind === 'pa' ? day.paBookings.map((b) => (b.attractionId === step.targetId ? { ...b, used: true } : b)) : day.paBookings,
       });
     }
     this.set({ forcedNextId: null, plan: null });
+    this.recompute();
+  }
+
+  /** Records the Carte Facilité registration, with the return time given by the Cast Member. */
+  registerEasyAccess(rideId: string, returnAt: number): boolean {
+    const place = this.state.catalog.get(rideId);
+    const { now } = this.state;
+    if (!this.state.persisted.profile?.easyAccess || place?.kind !== 'ride') return false;
+    if (!Number.isFinite(returnAt) || returnAt < now - 15 * MINUTE || returnAt > now + 8 * 60 * MINUTE) return false;
+    this.patchDay({
+      easyAccess: { rideId, returnAt },
+      position: { lat: place.lat, lon: place.lon, park: place.park, key: rideId },
+    });
+    this.set({ forcedNextId: null, plan: null });
+    this.recompute();
+    return true;
+  }
+
+  cancelEasyAccess(): void {
+    this.patchDay({ easyAccess: null });
     this.recompute();
   }
 
@@ -474,6 +529,7 @@ export class AppStore {
     const { day } = this.state.persisted;
     if (targetId === '') this.patchDay({ lunchDone: true });
     else if (!day.skipped.includes(targetId)) this.patchDay({ skipped: [...day.skipped, targetId] });
+    if (targetId !== '' && day.easyAccess?.rideId === targetId) this.patchDay({ easyAccess: null });
     if (this.state.persisted.day.shows.some((s) => s.showId === targetId)) {
       this.patchDay({ shows: this.state.persisted.day.shows.filter((s) => s.showId !== targetId) });
     }

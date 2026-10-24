@@ -1,15 +1,17 @@
 # ParcPilote
 
-Assistant de visite pour Disneyland Paris : à tout moment, la meilleure prochaine étape pour le groupe, en tenant compte des temps d'attente en direct, de la marche, des spectacles choisis, du Single Rider et du Premier Access. Version 0.2.2.
+Assistant de visite pour Disneyland Paris : à tout moment, la meilleure prochaine étape pour le groupe, en tenant compte des temps d'attente en direct, de la marche, des spectacles choisis, du Single Rider, du Premier Access et de la Carte Facilité. Version 0.3.0.
 
 ## Ce que fait l'application
 
 - **Maintenant** : la prochaine étape sur un seul écran (marche, attente, heure d'arrivée, file conseillée), avec « Fait », « Passer » et « Signaler ».
 - **Plan** : l'itinéraire de la journée sous forme de tracé, recalculé à chaque mise à jour ; « Faire maintenant » et « Retirer » par étape.
-- **Ma liste** : attractions en « Incontournable » ou « Si possible », séance de spectacle, filtrage automatique selon la taille du plus petit.
+- **Ma liste** : attractions en « Incontournable » ou « Si possible », nombre de fois souhaité dans la journée (jusqu'à 5), séance de spectacle, filtrage automatique selon la taille du plus petit.
 - **Carte interactive** : fond OpenStreetMap, attractions colorées selon l'attente, spectacles, restauration, toilettes et points d'eau (couches à cocher), géolocalisation avec précision, « À proximité » trié par temps de marche réel.
 - **Circuit tracé** : tout le plan du jour dessiné sur les allées, étapes numérotées, prochain tronçon mis en avant, et pour chaque tronçon la durée, la distance et les allées empruntées (« par Main Street U.S.A., … »). Itinéraire à la demande depuis votre position vers n'importe quel lieu.
-- **Groupe** : taille du groupe, enfant, Single Rider, budget Premier Access, rythme, poussette, pause déjeuner, parc de départ.
+- **Groupe** : taille du groupe, enfant, Single Rider, budget Premier Access, rythme, poussette, pause déjeuner, parc de départ, Carte Facilité.
+- **Carte Facilité (ALD)** : le titulaire s'inscrit à l'entrée Premier Access d'une attraction et reçoit une heure de retour égale à l'attente ; une seule inscription à la fois. Le plan place l'inscription, occupe le délai avec d'autres attractions en file normale, puis revient à l'heure de retour. L'heure donnée par le Cast Member est saisie dans l'application et remplace la prévision.
+- **Groupe scindé** : le titulaire passe avec 4 accompagnateurs au plus, enfants compris ; au-delà, les autres personnes font chaque attraction de leur côté (Single Rider si accepté) et retrouvent le groupe à la sortie. Si aucune file ne leur permet de sortir à moins de 10 min du groupe, le plan le dit.
 - **Heures de Magie en Plus** : lues dans les horaires officiels du jour ; si le groupe y a droit (hôtels Disney, certains pass), le plan commence par les attractions ouvertes avant l'ouverture officielle. Avant l'ouverture, les attractions fermées sont planifiées à partir de l'heure d'ouverture au lieu d'être écartées.
 - **Alertes** dans l'application : panne, réouverture, attente qui chute, départ pour un spectacle, données trop anciennes.
 - **Premier Access** : conseil chiffré (minutes gagnées, prix), puis saisie du créneau acheté qui devient une étape du plan.
@@ -66,9 +68,9 @@ Le workflow `.github/workflows/ci.yml` vérifie, construit, teste puis publie l'
 
 | Job | Contenu |
 | --- | --- |
-| `verify` | types, lint, 77 tests unitaires, `npm audit` |
+| `verify` | types, lint, 93 tests unitaires, `npm audit` |
 | `build` | PWA (`dist/`) et fichier unique (`dist-single/`) ; artefact Pages sur `main` |
-| `e2e` | 24 scénarios Playwright, captures en artefact ; une suite en échec est rejouée une fois, les instabilités sont signalées en annotation |
+| `e2e` | 30 scénarios Playwright, captures en artefact ; une suite en échec est rejouée une fois, les instabilités sont signalées en annotation |
 | `deploy` | publication GitHub Pages (push ou lancement manuel sur `main`) |
 
 Les pull requests passent les trois premiers jobs sans publier. Un passage hebdomadaire rejoue l'audit. Les actions sont épinglées par empreinte SHA, les permissions limitées par job ; le workflow est contrôlé par `actionlint` et `zizmor`. Dependabot (`.github/dependabot.yml`) propose chaque semaine les mises à jour npm, pip et GitHub Actions, avec un délai de 14 jours.
@@ -85,6 +87,8 @@ Dépôt : [Metazel/Parcpilote](https://github.com/Metazel/Parcpilote), avec **Se
 - Les prix Premier Access de l'API sont lus en centimes ; le créneau acheté est supposé durer 60 min.
 - Les attractions ouvertes pendant les Heures de Magie en Plus sont celles que le flux officiel indique ouvertes ; la démo simule Fantasyland et Discoveryland.
 - La qualité des trajets dépend de la cartographie OpenStreetMap des parcs ; une incohérence (trajet plus de 4 fois la ligne droite) est ignorée au profit de l'estimation.
+- Carte Facilité : règles reprises du fonctionnement constaté (heure de retour = attente du moment, une inscription à la fois, 5 personnes au plus). L'inscription se fait à l'attraction ; l'attente résiduelle à l'entrée Premier Access est estimée à 5 min. Le créneau est supposé valable jusqu'à la fermeture.
+- Groupe scindé : les enfants sont supposés accompagner le titulaire de la carte ; les tailles minimales s'appliquent à tout le groupe.
 - Pas de notifications en arrière-plan (exigent un serveur push), pas de partage communautaire des signalements : prévus en phase 2 avec la collecte d'historique.
 
 Application indépendante, non affiliée à Disney ni à Disneyland Paris.

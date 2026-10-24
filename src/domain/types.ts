@@ -109,6 +109,22 @@ export interface GroupProfile {
   readonly startPark: ParkId;
   /** Eligible to Extra Magic Hours (Disney hotel guests, some annual passes). */
   readonly emhAccess: boolean;
+  /**
+   * A member holds the Disneyland Paris "Carte Facilité" (long-term illness, ALD): return time
+   * equal to the current wait, one registration at a time, holder + up to 4 companions.
+   * Children ride with the holder; members beyond 5 ride on their own (Single Rider when
+   * `singleRiderOk`) and regroup at the exit.
+   */
+  readonly easyAccess: boolean;
+}
+
+/** Holder plus companions allowed on a Carte Facilité. */
+export const EASY_ACCESS_MAX_PARTY = 5;
+
+/** The Carte Facilité registration currently held, as given by the Cast Member. */
+export interface EasyAccessReservation {
+  readonly rideId: string;
+  readonly returnAt: number;
 }
 
 export type Priority = 'must' | 'nice';
@@ -123,6 +139,8 @@ export interface PaBooking {
   readonly returnStart: number;
   readonly returnEnd: number;
   readonly priceCents: number;
+  /** Ride done with this slot (it then counts among the day's rides). */
+  readonly used?: boolean;
 }
 
 /** Local correction learned from the user's own "actual wait" reports. */
@@ -131,9 +149,20 @@ export interface WaitCorrection {
   readonly samples: number;
 }
 
-export type QueueKind = 'standby' | 'single' | 'premier';
+/** `easy`: Premier Access entrance at the return time given with the Carte Facilité. */
+export type QueueKind = 'standby' | 'single' | 'premier' | 'easy';
 
-export type StepKind = 'ride' | 'show' | 'lunch' | 'pa';
+/** `easy-book`: go to the ride and register the Carte Facilité holder (return time). */
+export type StepKind = 'ride' | 'show' | 'lunch' | 'pa' | 'easy-book';
+
+/** What the members outside the Carte Facilité party do on a ride step. */
+export interface OthersPlan {
+  readonly count: number;
+  /** False when no queue lets them exit close to the card party: they wait at the exit. */
+  readonly rides: boolean;
+  readonly queue: QueueKind;
+  readonly waitMin: number;
+}
 
 export interface PlanStep {
   readonly kind: StepKind;
@@ -150,9 +179,16 @@ export interface PlanStep {
   readonly endAt: number;
   /** For time-bound steps (show, Premier Access, lunch): latest departure that still makes it. */
   readonly latestDepartAt: number | null;
+  /** Ride occurrence today (2 for the second ride of the same attraction), 0 for other steps. */
+  readonly rep: number;
+  /** Forecast Carte Facilité return time (registration steps), else null. */
+  readonly returnAt: number | null;
+  /** Members outside the Carte Facilité party, on ride steps of a split group; else null. */
+  readonly others: OthersPlan | null;
 }
 
-export type UnplannedReason = 'closed' | 'height' | 'time' | 'done';
+/** `repeat`: planned at least once, but not as many times as wished. */
+export type UnplannedReason = 'closed' | 'height' | 'time' | 'done' | 'repeat';
 
 export interface Plan {
   readonly computedAt: number;

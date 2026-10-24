@@ -3,7 +3,7 @@ import type { GeoPoint, Place, Poi, PoiKind, Position } from '../../domain/types
 import type { DrawnRoute } from '../../state/store';
 import { MapView, type MapLine, type MapMarker, type MapStop } from '../components/MapView';
 import { useAppState, useStore } from '../context';
-import { PARK_SHORT, liveLabel, minutes, waitBand } from '../format';
+import { PARK_SHORT, liveLabel, minutes, stepTitle, waitBand } from '../format';
 
 type Layer = 'rides' | 'shows' | PoiKind;
 type NearbyKind = 'ride' | PoiKind;
@@ -70,7 +70,7 @@ export function MapScreen({ report }: { report: (id: string) => void }) {
     let from: GeoPoint = here;
     for (const step of plan?.steps ?? []) {
       if (step.kind === 'lunch' || !step.targetId) continue;
-      out.push({ n: out.length + 1, targetId: step.targetId, name: step.name, to: step.position, walkMin: step.walkMin, route: store.route(from, step.position) });
+      out.push({ n: out.length + 1, targetId: step.targetId, name: step.kind === 'easy-book' ? `Inscription Carte Facilité : ${step.name}` : stepTitle(step), to: step.position, walkMin: step.walkMin, route: store.route(from, step.position) });
       from = step.position;
     }
     return out;

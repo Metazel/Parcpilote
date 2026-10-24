@@ -1,6 +1,6 @@
 {
   "name": "parcpilote",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "private": true,
   "description": "Assistant de visite de parc d'attractions : prochaine étape optimisée en temps réel (MVP Disneyland Paris).",
   "type": "module",

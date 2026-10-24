@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'preact/hooks';
 import { normalizeName } from '../../data/catalog';
-import { heightAllowed } from '../../domain/planner';
+import { MAX_REPEATS, heightAllowed } from '../../domain/planner';
 import { MINUTE, formatHM } from '../../domain/time';
 import type { Attraction, ParkId, Priority, Show } from '../../domain/types';
 import { useAppState, useStore } from '../context';
@@ -23,6 +23,8 @@ function RideItem({ ride }: { ride: Attraction }) {
   const allowed = !profile || heightAllowed(ride, profile);
   const band = waitBand(live);
   const name = `prio-${ride.id}`;
+  const times = persisted.repeats[ride.id] ?? 1;
+  const doneTimes = persisted.day.done.filter((id) => id === ride.id).length;
 
   return (
     <fieldset class="item">
@@ -32,8 +34,10 @@ function RideItem({ ride }: { ride: Attraction }) {
         {ride.minHeightCm > 0 && <span class="tag">{ride.minHeightCm} cm min.</span>}
         {ride.singleRider && <span class="tag">Single Rider</span>}
         {ride.premierAccess && <span class="tag">Premier Access</span>}
+        {doneTimes > 0 && <span class="tag">Faite{doneTimes > 1 ? ` ${doneTimes} fois` : ''}</span>}
       </div>
       {allowed ? (
+        <>
         <div class="segmented" role="radiogroup" aria-label={`Priorité pour ${ride.name}`}>
           {PRIORITY_OPTIONS.map((o) => (
             <label key={o.value}>
@@ -48,6 +52,19 @@ function RideItem({ ride }: { ride: Attraction }) {
             </label>
           ))}
         </div>
+        {current !== 'none' && (
+          <div class="field field-inline">
+            <label for={`times-${ride.id}`}>Nombre de fois aujourd'hui</label>
+            <select id={`times-${ride.id}`} value={String(times)} onChange={(e) => store.setRepeat(ride.id, Number((e.target as HTMLSelectElement).value))}>
+              {Array.from({ length: MAX_REPEATS }, (_, i) => i + 1).map((n) => (
+                <option key={n} value={String(n)}>
+                  {n === 1 ? '1 fois' : `${n} fois`}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+        </>
       ) : (
         <p class="hint">Réservée aux personnes d'au moins {ride.minHeightCm} cm : retirée selon le profil du groupe.</p>
       )}

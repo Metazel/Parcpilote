@@ -2,7 +2,7 @@ import { formatHM } from '../../domain/time';
 import { PARK_NAMES } from '../../domain/types';
 import { useAppState, useStore } from '../context';
 import type { Tab } from '../context';
-import { QUEUE_LABEL, REASON_LABEL, STEP_LABEL, minutes } from '../format';
+import { QUEUE_LABEL, REASON_LABEL, STEP_LABEL, minutes, stepTitle } from '../format';
 
 export function PlanScreen({ go }: { go: (tab: Tab) => void }) {
   const store = useStore();
@@ -22,8 +22,10 @@ export function PlanScreen({ go }: { go: (tab: Tab) => void }) {
 
   const nameOf = (id: string) => catalog.get(id)?.name ?? id;
   const wishSet = new Set(persisted.wishes.map(([id]) => id));
-  const doneIds = persisted.day.done;
-  const skipped = persisted.day.skipped;
+  const doneCounts = new Map<string, number>();
+  for (const id of persisted.day.done) doneCounts.set(id, (doneCounts.get(id) ?? 0) + 1);
+  const doneIds = [...doneCounts.keys()];
+  const skipped = persisted.day.skipped.filter((id) => !doneCounts.has(id));
 
   return (
     <div>
@@ -57,7 +59,7 @@ export function PlanScreen({ go }: { go: (tab: Tab) => void }) {
         <p class="hint">Heure d'arrivée à chaque attraction, heure de début pour les spectacles et la pause.</p>
         <ol class="route" aria-label="Étapes dans l'ordre">
           {plan.steps.map((s, i) => (
-            <li key={`${s.kind}:${s.targetId}`} class={`stop ${s.kind} ${s.position.park}`}>
+            <li key={`${s.kind}:${s.targetId}:${i}`} class={`stop ${s.kind} ${s.position.park}`}>
               <span class="stop-time">{formatHM(s.kind === 'ride' ? s.arriveAt : s.startAt)}</span>
               <span class="stop-rail" aria-hidden="true">
                 <span class="stop-dot" />
@@ -65,16 +67,25 @@ export function PlanScreen({ go }: { go: (tab: Tab) => void }) {
               <div class="stop-body">
                 {s.walkMin > 0 && <p class="walk-leg">{minutes(s.walkMin)} de marche</p>}
                 <p class="stop-name">
-                  {s.name}
+                  {s.kind === 'easy-book' ? `Inscription Carte Facilité : ${s.name}` : stepTitle(s)}
                   <span class="visually-hidden">, {STEP_LABEL[s.kind]}</span>
                 </p>
                 <p class="stop-meta">
                   {s.kind === 'lunch'
                     ? `Jusqu'à ${formatHM(s.endAt)}`
-                    : s.kind === 'show'
-                      ? `Arrivée ${formatHM(s.arriveAt)}, début ${formatHM(s.startAt)}`
-                      : `Attente ${minutes(s.waitMin)}${s.queue && s.queue !== 'standby' ? ` en ${QUEUE_LABEL[s.queue]}` : ''}, embarquement ${formatHM(s.startAt)}, sortie ${formatHM(s.endAt)}`}
+                    : s.kind === 'easy-book'
+                      ? `Retour prévu vers ${formatHM(s.returnAt ?? s.endAt)} ; en attendant, les étapes suivantes`
+                      : s.kind === 'show'
+                        ? `Arrivée ${formatHM(s.arriveAt)}, début ${formatHM(s.startAt)}`
+                        : `Attente ${minutes(s.waitMin)}${s.queue && s.queue !== 'standby' ? ` en ${QUEUE_LABEL[s.queue]}` : ''}, embarquement ${formatHM(s.startAt)}, sortie ${formatHM(s.endAt)}`}
                 </p>
+                {s.others && (
+                  <p class="stop-meta">
+                    {s.others.rides
+                      ? `Hors carte (${s.others.count}) : ${QUEUE_LABEL[s.others.queue]}, ${minutes(s.others.waitMin)}`
+                      : `Hors carte (${s.others.count}) : attendent à la sortie`}
+                  </p>
+                )}
                 {s.kind === 'ride' && (
                   <div class="row stop-actions">
                     {i > 0 && (
@@ -128,7 +139,7 @@ export function PlanScreen({ go }: { go: (tab: Tab) => void }) {
             {[...doneIds.map((id) => ({ id, done: true })), ...skipped.map((id) => ({ id, done: false }))].map(({ id, done }) => (
               <li key={id}>
                 <span>
-                  {nameOf(id)} <span class="muted">({done ? 'fait' : 'retiré'})</span>
+                  {nameOf(id)} <span class="muted">({done ? ((doneCounts.get(id) ?? 1) > 1 ? `fait ${doneCounts.get(id)} fois` : 'fait') : 'retiré'})</span>
                 </span>
                 {wishSet.has(id) && (
                   <button class="btn btn-quiet btn-small" type="button" onClick={() => store.restore(id)}>
