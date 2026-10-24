@@ -1,4 +1,5 @@
 import { seedCatalog } from '../src/data/catalog';
+import { curatedParks } from '../src/data/demo';
 import { DEFAULT_PROFILE } from '../src/state/storage';
 import type { StorageLike } from '../src/state/storage';
 import { MINUTE, parkWallTime } from '../src/domain/time';
@@ -21,6 +22,7 @@ export function snapshot(overrides: Record<string, Partial<LiveAttraction>> = {}
   return {
     source: 'demo',
     fetchedAt: now,
+    parks: curatedParks(),
     attractions,
     showtimes,
     hours: {

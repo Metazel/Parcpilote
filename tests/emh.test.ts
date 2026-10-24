@@ -51,7 +51,7 @@ describe('Extra Magic Hours', () => {
 
   it('simulates EMH in the demo (two lands only)', () => {
     const snap = demoSnapshot(at(8, 45), catalog);
-    expect(snap.hours.dlp.emh).toEqual({ open: at(8, 30), close: at(9, 30) });
+    expect(snap.hours.dlp?.emh).toEqual({ open: at(8, 30), close: at(9, 30) });
     expect(snap.attractions['dlp-peter-pan']?.status).toBe('OPERATING');
     expect(snap.attractions['dlp-big-thunder']?.status).toBe('CLOSED');
     expect(snap.attractions['daw-crush']?.status).toBe('CLOSED');

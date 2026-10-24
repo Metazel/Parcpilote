@@ -1,12 +1,11 @@
 import { formatHM } from '../../domain/time';
-import { PARK_NAMES } from '../../domain/types';
 import { useAppState, useStore } from '../context';
 import type { Tab } from '../context';
-import { MEAL_MODE_LABEL, QUEUE_LABEL, REASON_LABEL, STEP_LABEL, minutes, stepTitle } from '../format';
+import { MEAL_MODE_LABEL, QUEUE_LABEL, REASON_LABEL, STEP_LABEL, minutes, parkClass, stepTitle } from '../format';
 
 export function PlanScreen({ go }: { go: (tab: Tab) => void }) {
   const store = useStore();
-  const { plan, planPending, catalog, persisted, now, snapshot } = useAppState();
+  const { plan, planPending, catalog, persisted, now, snapshot, resort } = useAppState();
 
   if (!plan && planPending) {
     return (
@@ -54,12 +53,13 @@ export function PlanScreen({ go }: { go: (tab: Tab) => void }) {
       </dl>
 
       {snapshot &&
-        (['dlp', 'daw'] as const).map((park) => {
+        resort.def.features.emh &&
+        snapshot.parks.map(({ id: park, name }) => {
           const h = snapshot.hours[park];
-          if (!h.emh || now >= h.emh.close) return null;
+          if (!h?.emh || now >= h.emh.close) return null;
           return (
             <p key={park} class="emh">
-              Heures de Magie en Plus à {PARK_NAMES[park]} de {formatHM(h.emh.open)} à {formatHM(h.emh.close)} (ouverture officielle {formatHM(h.open)}).{' '}
+              Heures de Magie en Plus à {name} de {formatHM(h.emh.open)} à {formatHM(h.emh.close)} (ouverture officielle {formatHM(h.open)}).{' '}
               {persisted.profile?.emhAccess ? 'Votre plan en profite.' : 'Réservées aux clients des hôtels Disney et pass éligibles : activez-les dans Groupe si c’est votre cas.'}
             </p>
           );
@@ -72,7 +72,7 @@ export function PlanScreen({ go }: { go: (tab: Tab) => void }) {
         <p class="hint">Heure d'arrivée à chaque attraction, heure de début pour les spectacles et la pause.</p>
         <ol class="route" aria-label="Étapes dans l'ordre">
           {plan.steps.map((s, i) => (
-            <li key={`${s.kind}:${s.targetId}:${i}`} class={`stop ${s.kind} ${s.position.park}${i === 0 ? ' stop-next' : ''}`}>
+            <li key={`${s.kind}:${s.targetId}:${i}`} class={`stop ${s.kind} ${parkClass(resort.parks, s.position.park)}${i === 0 ? ' stop-next' : ''}`}>
               <span class="stop-time">{formatHM(s.kind === 'ride' ? s.arriveAt : s.startAt)}</span>
               <span class="stop-rail" aria-hidden="true">
                 <span class="stop-dot" />

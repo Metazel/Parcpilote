@@ -3,9 +3,8 @@ import type { GeoPoint, Place, Poi, PoiKind, Position } from '../../domain/types
 import type { DrawnRoute } from '../../state/store';
 import { MapView, type MapLine, type MapMarker, type MapStop } from '../components/MapView';
 import { useAppState, useStore } from '../context';
-import { PARK_SHORT, POI_LABEL, SERVICE_LABEL, liveLabel, minutes, stepTitle, waitBand } from '../format';
+import { POI_LABEL, SERVICE_LABEL, liveLabel, minutes, parkShort, stepTitle, waitBand, whereLabel } from '../format';
 import { ExternalLink } from '../components/ExternalLink';
-import { DLP_DINING } from '../../data/resort';
 
 type Layer = 'rides' | 'shows' | PoiKind;
 type NearbyKind = 'ride' | PoiKind;
@@ -31,7 +30,7 @@ const NEARBY: ReadonlyArray<{ id: NearbyKind; label: string }> = [
 function poiExtra(p: Poi): string | null {
   const parts: string[] = [];
   if (p.service) parts.push(SERVICE_LABEL[p.service]);
-  if (p.outside) parts.push('hors des parcs');
+  if (p.outside) parts.push('hors du parc');
   if (p.source === 'official') parts.push('liste officielle');
   return parts.length > 0 ? parts.join(', ') : null;
 }
@@ -58,7 +57,7 @@ interface Leg {
 export function MapScreen({ report }: { report: (id: string) => void }) {
   const store = useStore();
   const state = useAppState();
-  const { catalog, snapshot, plan, persisted, pois, graph, gps, gpsAccuracyM, osm } = state;
+  const { catalog, snapshot, plan, persisted, pois, graph, gps, gpsAccuracyM, osm, resort } = state;
   const [layersOn, setLayersOn] = useState<ReadonlySet<Layer>>(new Set<Layer>(['rides', 'shows', 'food', 'picnic', 'toilets']));
   const [selected, setSelected] = useState<string | null>(null);
   const [focusId, setFocusId] = useState<string | null>(null);
@@ -177,6 +176,7 @@ export function MapScreen({ report }: { report: (id: string) => void }) {
       </div>
 
       <MapView
+        center={here}
         markers={markers}
         lines={lines}
         stops={stops}
@@ -217,8 +217,8 @@ export function MapScreen({ report }: { report: (id: string) => void }) {
           <h2 id="sel-title">{sel.name}</h2>
           <p class="muted">
             {'kind' in sel && (sel.kind === 'ride' || sel.kind === 'show')
-              ? `${sel.land}, ${PARK_SHORT[sel.park]}${sel.kind === 'ride' ? ` : ${liveLabel(snapshot?.attractions[sel.id])}` : ''}`
-              : `${POI_LABEL[(sel as Poi).kind]}${(sel as Poi).service ? ` ${SERVICE_LABEL[(sel as Poi).service!]}` : ''}, ${PARK_SHORT[(sel as Poi).park]}${(sel as Poi).outside ? ', hors des parcs' : ''}${(sel as Poi).source === 'official' ? ', liste officielle' : (sel as Poi).source === 'osm' ? ', OpenStreetMap' : ''}`}
+              ? `${whereLabel(sel.land, resort.parks, sel.park)}${sel.kind === 'ride' ? ` : ${liveLabel(snapshot?.attractions[sel.id])}` : ''}`
+              : `${POI_LABEL[(sel as Poi).kind]}${(sel as Poi).service ? ` ${SERVICE_LABEL[(sel as Poi).service!]}` : ''}, ${parkShort(resort.parks, (sel as Poi).park)}${(sel as Poi).outside ? ', hors du parc' : ''}${(sel as Poi).source === 'official' ? ', liste officielle' : (sel as Poi).source === 'osm' ? ', OpenStreetMap' : ''}`}
           </p>
           {focusId === sel.id && focusRoute && <p>À pied depuis votre position : {describe(focusRoute, focusMin)}.</p>}
           <div class="row">
@@ -236,12 +236,12 @@ export function MapScreen({ report }: { report: (id: string) => void }) {
               </button>
             )}
             {'service' in sel && sel.kind === 'food' && (
-              <ExternalLink class="btn btn-quiet btn-small" href={sel.url ?? DLP_DINING.restaurantsUrl}>
+              <ExternalLink class="btn btn-quiet btn-small" href={sel.url ?? resort.def.dining.restaurantsUrl}>
                 {sel.url ? 'Voir le menu' : 'Menus sur le site officiel'}
               </ExternalLink>
             )}
           </div>
-          {'service' in sel && sel.kind === 'picnic' && <p class="hint">{DLP_DINING.picnicNote}</p>}
+          {'service' in sel && sel.kind === 'picnic' && <p class="hint">{resort.def.dining.picnicNote}</p>}
         </section>
       )}
 

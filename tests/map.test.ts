@@ -46,10 +46,22 @@ describe('OpenStreetMap parsing', () => {
     expect(parseCompactOsm({ ...data, lat: [...data.lat.slice(0, -1), 10] }, NOW)).toBeNull();
     expect(parseCompactOsm({ ...data, names: ['<script>'.repeat(30)] }, NOW)).toBeNull();
     expect(parseCompactOsm(data, NOW + 40 * 24 * 3_600_000)).toBeNull();
+    // The cached area travels with the data and must stay a park-sized box.
+    expect(parseCompactOsm({ ...data, bbox: [40, 0, 50, 10] }, NOW)).toBeNull();
+    expect(parseCompactOsm({ ...data, bbox: [48.87, 2.77, 48.86, 2.78] }, NOW)).toBeNull();
+    expect(parseCompactOsm({ ...data, v: 2 }, NOW)).toBeNull();
+  });
+
+  it('asks for named attractions only for parks without live feed', () => {
+    const area = [46.88, -0.95, 46.9, -0.91] as const;
+    expect(overpassQuery(area)).not.toContain('tourism"="attraction');
+    const q = overpassQuery(area, true);
+    expect(q).toContain(area.join(','));
+    expect(q).toContain('"tourism"="attraction"');
   });
 
   it('keeps the largest component', () => {
-    const tiny: CompactOsm = { v: 2, fetchedAt: NOW, lat: [48.87, 48.8701, 48.8702, 48.875, 48.8751], lon: [2.77, 2.77, 2.77, 2.78, 2.78], edges: [0, 1, -1, 1, 2, -1, 3, 4, -1], names: [], pois: [] };
+    const tiny: CompactOsm = { v: 3, fetchedAt: NOW, bbox: RESORT_BBOX, sights: [], lat: [48.87, 48.8701, 48.8702, 48.875, 48.8751], lon: [2.77, 2.77, 2.77, 2.78, 2.78], edges: [0, 1, -1, 1, 2, -1, 3, 4, -1], names: [], pois: [] };
     expect(keepMainComponent(tiny).lat).toHaveLength(3);
   });
 });

@@ -9,6 +9,8 @@ const MAX_DISTANCE_FROM_PARK_M = 450;
 const MAX_PICNIC_DISTANCE_M = 900;
 /** An OpenStreetMap restaurant this close to an official one is the same place. */
 const DUPLICATE_M = 35;
+/** 'auto' picnic rule: an area this far from every attraction is taken as outside the gates. */
+const PICNIC_OUTSIDE_M = 250;
 
 const DEFAULT_NAME: Readonly<Record<PoiKind, string>> = { toilets: 'Toilettes', food: 'Restauration', water: "Point d'eau", picnic: 'Aire de pique-nique' };
 
@@ -33,7 +35,7 @@ export function buildPois(
   dining: ResortDining = DLP_DINING,
 ): Poi[] {
   const places = [...catalog.values()];
-  const out: Poi[] = official.map((r) => ({
+  const out: Poi[] = official.map((r): Poi => ({
     id: `api-${r.id}`,
     kind: 'food',
     name: r.name,
@@ -45,11 +47,20 @@ export function buildPois(
     url: null,
     outside: false,
   }));
+  const curatedTables = dining === DLP_DINING || dining.tableService.length > 0;
   osm?.pois.forEach(([kind, name, lat, lon, service, url], i) => {
     const near = nearestPark({ lat, lon }, places);
     const limit = kind === 'picnic' ? MAX_PICNIC_DISTANCE_M : MAX_DISTANCE_FROM_PARK_M;
     if (!near || near.meters > limit) return;
-    if (kind === 'food' && out.some((o) => o.source === 'official' && haversineM(o, { lat, lon }) < DUPLICATE_M)) return;
+    if (kind === 'food') {
+      const same = out.findIndex((o) => o.source === 'official' && haversineM(o, { lat, lon }) < DUPLICATE_M);
+      if (same >= 0) {
+        // The official entry stays; OpenStreetMap adds what the feed lacks (menu link, service type).
+        const o = out[same]!;
+        out[same] = { ...o, url: o.url ?? (url || null), service: curatedTables || !service ? o.service : service };
+        return;
+      }
+    }
     out.push({
       id: `osm-${i}`,
       kind,
@@ -60,7 +71,7 @@ export function buildPois(
       source: 'osm',
       service: kind === 'food' ? service || 'quick' : null,
       url: url || null,
-      outside: kind === 'picnic' && dining.picnic === 'outside',
+      outside: kind === 'picnic' && (dining.picnic === 'outside' || (dining.picnic === 'auto' && near.meters > PICNIC_OUTSIDE_M)),
     });
   });
   if (dining.picnicFallback && !out.some((p) => p.kind === 'picnic')) {

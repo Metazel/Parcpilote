@@ -1,8 +1,10 @@
-import { type NetworkFn, createWalkCache, haversineM } from './geo';
+import { type Entrances, type NetworkFn, createWalkCache, haversineM } from './geo';
 import { MINUTE, minuteOfDayFn, parkWallTime } from './time';
 import {
   type Attraction,
   EASY_ACCESS_MAX_PARTY,
+  type GeoPoint,
+  type ParkId,
   type EasyAccessReservation,
   type GroupProfile,
   type LiveSnapshot,
@@ -11,6 +13,7 @@ import {
   type MealSlot,
   type OthersPlan,
   type PaBooking,
+  type ParkHours,
   type Place,
   type Plan,
   type PlanStep,
@@ -161,6 +164,18 @@ interface SimResult {
   readonly stepOf: ReadonlyMap<string, number>;
 }
 
+/** Opening hours of a park; a park missing from the feed borrows the destination's first one. */
+export function parkHours(snapshot: LiveSnapshot, park: ParkId): ParkHours {
+  return snapshot.hours[park] ?? Object.values(snapshot.hours)[0] ?? { open: 0, close: 0, emh: null };
+}
+
+/** Gates of the day's parks, for park-to-park transfers. */
+export function entrancesOf(snapshot: LiveSnapshot): Entrances {
+  const out: Record<ParkId, GeoPoint> = {};
+  for (const p of snapshot.parks) out[p.id] = p.entrance;
+  return out;
+}
+
 export function heightAllowed(ride: Attraction, profile: GroupProfile): boolean {
   return profile.smallestHeightCm === null || ride.minHeightCm <= profile.smallestHeightCm;
 }
@@ -212,7 +227,7 @@ class Simulator {
     private readonly firstIsForced: boolean,
   ) {
     const { profile } = input;
-    this.walk = createWalkCache({ pace: profile.pace, stroller: profile.stroller }, input.network);
+    this.walk = createWalkCache({ pace: profile.pace, stroller: profile.stroller }, input.network, entrancesOf(input.snapshot));
     this.srMain = singleRiderAllowed(profile);
     this.others = othersCount(profile);
     this.srOthers = this.others > 0 && profile.singleRiderOk;
@@ -310,7 +325,7 @@ class Simulator {
       const ride = next.ride;
       const walk = this.walk(posKey, pos, ride.id, ride);
       const arrive = Math.max(t + walk * MINUTE, next.availableFrom);
-      if (arrive + EASY_ACCESS_BOOK_MIN * MINUTE > snapshot.hours[ride.park].close) return;
+      if (arrive + EASY_ACCESS_BOOK_MIN * MINUTE > parkHours(snapshot, ride.park).close) return;
       const returnAt = arrive + this.standbyWait(ride, arrive) * MINUTE;
       const endAt = arrive + EASY_ACCESS_BOOK_MIN * MINUTE;
       steps.push({
@@ -342,7 +357,7 @@ class Simulator {
       const item = seq[i]!;
       if (item.kind === 'ride') {
         const ride = item.ride;
-        const hours = snapshot.hours[ride.park];
+        const hours = parkHours(snapshot, ride.park);
         const walk = this.walk(posKey, pos, ride.id, ride);
         let arrive = t + walk * MINUTE;
         const viaCard = held !== null && held.key === item.key;
@@ -514,7 +529,7 @@ interface Prepared {
  * Extra Magic Hours rides, usable early only by eligible groups.
  */
 export function availableFrom(ride: Attraction, input: Pick<PlanInput, 'now' | 'snapshot' | 'profile'>): number | null {
-  const hours = input.snapshot.hours[ride.park];
+  const hours = parkHours(input.snapshot, ride.park);
   const live = input.snapshot.attractions[ride.id];
   const preOpening = input.now < hours.open;
   if (!live) return hours.open;

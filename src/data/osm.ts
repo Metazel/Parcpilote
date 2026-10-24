@@ -1,19 +1,24 @@
 import type { FoodService, PoiKind } from '../domain/types';
-import type { CompactOsm, CompactPoi } from '../domain/walkGraph';
+import type { Bbox, CompactOsm, CompactPoi, CompactSight } from '../domain/walkGraph';
+import type { GeoPoint } from '../domain/types';
 import type { FetchFn } from './themeparks';
 import { arr, int, isRecord, num, safeUrl, str } from './validate';
 
 /**
- * OpenStreetMap data for the resort, fetched once from the Overpass API (fixed bounding box:
- * no user location is ever sent) and cached on the device in a compact, validated form.
- * Data © OpenStreetMap contributors, ODbL.
+ * OpenStreetMap data for the visited park, fetched once from the Overpass API (a fixed area
+ * around the park: no user location is ever sent) and cached on the device in a compact,
+ * validated form, one cache per destination. Data © OpenStreetMap contributors, ODbL.
  */
 
 export const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
-/** South, West, North, East — both parks and the plaza between them. */
-export const RESORT_BBOX = [48.8615, 2.768, 48.8785, 2.786] as const;
-/** v2: picnic areas, food service type and menu links (older caches are fetched again). */
-export const OSM_CACHE_KEY = 'parcpilote:osm:v2';
+/** South, West, North, East — Disneyland Paris: both parks and the plaza between them. */
+export const RESORT_BBOX: Bbox = [48.8615, 2.768, 48.8785, 2.786];
+/** v3: one cache per destination, area stored with the data (older caches are fetched again). */
+export const OSM_CACHE_PREFIX = 'parcpilote:osm:v3:';
+/** Cache of the Disneyland Paris data (kept for compatibility with tests and tools). */
+export const OSM_CACHE_KEY = `${OSM_CACHE_PREFIX}dlp`;
+/** Largest area accepted (degrees), against tampered caches. */
+const MAX_SPAN_DEG = 0.1;
 export const OSM_MAX_AGE_MS = 30 * 24 * 3_600_000;
 
 const MAX_ELEMENTS = 150_000;
@@ -50,8 +55,17 @@ function linkOf(tags: Record<string, unknown>): string {
   return safeUrl(tags['website:menu']) ?? safeUrl(tags.menu) ?? safeUrl(tags.website) ?? safeUrl(tags['contact:website']) ?? '';
 }
 
-export function overpassQuery(): string {
-  const bbox = RESORT_BBOX.join(',');
+/** Square area of `radiusM` around a point. */
+export function bboxAround(c: GeoPoint, radiusM: number): Bbox {
+  const dLat = radiusM / 111_320;
+  const dLon = radiusM / (111_320 * Math.cos((c.lat * Math.PI) / 180));
+  const r = (v: number) => Math.round(v * 1e5) / 1e5;
+  return [r(c.lat - dLat), r(c.lon - dLon), r(c.lat + dLat), r(c.lon + dLon)];
+}
+
+/** Overpass query; `sights` adds named attractions and theatres (manual-mode catalogue). */
+export function overpassQuery(area: Bbox = RESORT_BBOX, sights = false): string {
+  const bbox = area.join(',');
   return [
     '[out:json][timeout:25];',
     '(',
@@ -59,14 +73,22 @@ export function overpassQuery(): string {
     `nw["amenity"~"^(${Object.keys(AMENITY).join('|')})$"](${bbox});`,
     `nw["leisure"~"^(${[...PICNIC].join('|')})$"](${bbox});`,
     `nw["tourism"="picnic_site"](${bbox});`,
+    ...(sights ? [`nw["attraction"]["name"](${bbox});`, `nw["tourism"="attraction"]["name"](${bbox});`, `nw["amenity"="theatre"]["name"](${bbox});`] : []),
     ');',
     'out geom qt;',
   ].join('');
 }
 
-function inBbox(lat: number, lon: number): boolean {
-  const [s, w, n, e] = RESORT_BBOX;
+function inBbox(area: Bbox, lat: number, lon: number): boolean {
+  const [s, w, n, e] = area;
   return lat >= s - 0.01 && lat <= n + 0.01 && lon >= w - 0.01 && lon <= e + 0.01;
+}
+
+/** A named attraction or theatre, with a ride/show hint. */
+function sightOf(tags: Record<string, unknown>): 'ride' | 'show' | null {
+  if (!str(tags.name, MAX_NAME)) return null;
+  if (str(tags.amenity, 40) === 'theatre') return 'show';
+  return str(tags.attraction, 40) || str(tags.tourism, 40) === 'attraction' ? 'ride' : null;
 }
 
 function walkable(tags: Record<string, unknown>): boolean {
@@ -81,7 +103,7 @@ function walkable(tags: Record<string, unknown>): boolean {
 }
 
 /** Turns an Overpass JSON response into the compact routing + POI form (main component only). */
-export function buildCompactOsm(json: unknown, fetchedAt: number): CompactOsm {
+export function buildCompactOsm(json: unknown, fetchedAt: number, area: Bbox = RESORT_BBOX): CompactOsm {
   if (!isRecord(json)) throw new Error('Réponse OpenStreetMap invalide');
   const elements = arr(json.elements, MAX_ELEMENTS);
   if (!elements) throw new Error('Réponse OpenStreetMap invalide');
@@ -93,6 +115,8 @@ export function buildCompactOsm(json: unknown, fetchedAt: number): CompactOsm {
   const nameIndex = new Map<string, number>();
   const edgeList: number[] = [];
   const pois: CompactPoi[] = [];
+  const sights: CompactSight[] = [];
+  const inArea = (la: number, lo: number) => inBbox(area, la, lo);
 
   const nodeIdx = (id: number, la: number, lo: number): number => {
     let i = index.get(id);
@@ -110,11 +134,18 @@ export function buildCompactOsm(json: unknown, fetchedAt: number): CompactOsm {
     const tags = isRecord(el.tags) ? el.tags : {};
     const poi = poiOf(tags);
     const kind = poi?.kind;
+    const sight = poi ? null : sightOf(tags);
+    if (sight && el.type === 'node') {
+      const la = num(el.lat, -90, 90);
+      const lo = num(el.lon, -180, 180);
+      if (la !== null && lo !== null && inArea(la, lo)) sights.push([str(tags.name, MAX_NAME)!, la, lo, sight]);
+      continue;
+    }
 
     if (el.type === 'node' && poi) {
       const la = num(el.lat, -90, 90);
       const lo = num(el.lon, -180, 180);
-      if (la !== null && lo !== null && inBbox(la, lo)) pois.push([poi.kind, str(tags.name, MAX_NAME) ?? '', la, lo, poi.service, linkOf(tags)]);
+      if (la !== null && lo !== null && inArea(la, lo)) pois.push([poi.kind, str(tags.name, MAX_NAME) ?? '', la, lo, poi.service, linkOf(tags)]);
       continue;
     }
     if (el.type !== 'way') continue;
@@ -127,7 +158,7 @@ export function buildCompactOsm(json: unknown, fetchedAt: number): CompactOsm {
       const id = int(nodes[k], 1, Number.MAX_SAFE_INTEGER);
       const la = isRecord(g) ? num(g.lat, -90, 90) : null;
       const lo = isRecord(g) ? num(g.lon, -180, 180) : null;
-      if (id === null || la === null || lo === null || !inBbox(la, lo)) {
+      if (id === null || la === null || lo === null || !inArea(la, lo)) {
         pts.length = 0;
         break;
       }
@@ -135,10 +166,11 @@ export function buildCompactOsm(json: unknown, fetchedAt: number): CompactOsm {
     }
     if (pts.length === 0) continue;
 
-    if (poi && kind) {
-      // Amenity mapped as a building outline: use its centroid.
+    if ((poi && kind) || sight) {
+      // Mapped as an outline: use its centroid.
       const c = pts.reduce((a, p) => ({ lat: a.lat + p.lat / pts.length, lon: a.lon + p.lon / pts.length }), { lat: 0, lon: 0 });
-      pois.push([kind, str(tags.name, MAX_NAME) ?? '', c.lat, c.lon, poi.service, linkOf(tags)]);
+      if (poi && kind) pois.push([kind, str(tags.name, MAX_NAME) ?? '', c.lat, c.lon, poi.service, linkOf(tags)]);
+      else if (sight) sights.push([str(tags.name, MAX_NAME)!, c.lat, c.lon, sight]);
       if (!walkable(tags)) continue;
     }
     if (!walkable(tags) || pts.length < 2) continue;
@@ -159,7 +191,7 @@ export function buildCompactOsm(json: unknown, fetchedAt: number): CompactOsm {
     }
     if (lat.length > MAX_NODES) throw new Error('Données OpenStreetMap trop volumineuses');
   }
-  return keepMainComponent({ v: 2, fetchedAt, lat, lon, edges: edgeList, names, pois });
+  return keepMainComponent({ v: 3, bbox: area, fetchedAt, lat, lon, edges: edgeList, names, pois, sights });
 }
 
 /** Drops disconnected fragments so that every snapped point can reach every other one. */
@@ -217,7 +249,13 @@ export function keepMainComponent(data: CompactOsm): CompactOsm {
 
 /** Validates a cached compact form (untrusted: it comes back from localStorage). */
 export function parseCompactOsm(v: unknown, now: number): CompactOsm | null {
-  if (!isRecord(v) || v.v !== 2) return null;
+  if (!isRecord(v) || v.v !== 3) return null;
+  const bb = arr(v.bbox, 4);
+  const area = bb && bb.length === 4 ? (bb.map((x, i) => num(x, i % 2 === 0 ? -90 : -180, i % 2 === 0 ? 90 : 180)) as Array<number | null>) : null;
+  if (!area || area.some((x) => x === null)) return null;
+  const [s0, w0, n0, e0] = area as number[];
+  if (!(n0! > s0! && e0! > w0! && n0! - s0! <= MAX_SPAN_DEG && e0! - w0! <= MAX_SPAN_DEG)) return null;
+  const bbox: Bbox = [s0!, w0!, n0!, e0!];
   const fetchedAt = int(v.fetchedAt, Date.UTC(2020, 0, 1), now + 60_000);
   if (fetchedAt === null || now - fetchedAt > OSM_MAX_AGE_MS) return null;
   const lat = arr(v.lat, MAX_NODES);
@@ -230,7 +268,7 @@ export function parseCompactOsm(v: unknown, now: number): CompactOsm | null {
   for (let i = 0; i < n; i++) {
     const la = num(lat[i], -90, 90);
     const lo = num(lon[i], -180, 180);
-    if (la === null || lo === null || !inBbox(la, lo)) return null;
+    if (la === null || lo === null || !inBbox(bbox, la, lo)) return null;
   }
   for (let e = 0; e < edges.length; e += 3) {
     if (int(edges[e], 0, n - 1) === null || int(edges[e + 1], 0, n - 1) === null || int(edges[e + 2], -1, names.length - 1) === null) return null;
@@ -245,18 +283,27 @@ export function parseCompactOsm(v: unknown, now: number): CompactOsm | null {
     const lo = num(p[3], -180, 180);
     const service = p[4] === 'quick' || p[4] === 'table' ? p[4] : p[4] === '' ? '' : null;
     const url = p[5] === '' ? '' : safeUrl(p[5]);
-    if (kind && name !== null && la !== null && lo !== null && service !== null && url !== null && inBbox(la, lo)) cleanPois.push([kind, name, la, lo, service, url]);
+    if (kind && name !== null && la !== null && lo !== null && service !== null && url !== null && inBbox(bbox, la, lo)) cleanPois.push([kind, name, la, lo, service, url]);
   }
-  return { v: 2, fetchedAt, lat: lat as number[], lon: lon as number[], edges: edges as number[], names: names as string[], pois: cleanPois };
+  const cleanSights: CompactSight[] = [];
+  for (const g of arr(v.sights, 2000) ?? []) {
+    if (!Array.isArray(g) || g.length !== 4) continue;
+    const name = str(g[0], MAX_NAME);
+    const la = num(g[1], -90, 90);
+    const lo = num(g[2], -180, 180);
+    const hint = g[3] === 'ride' || g[3] === 'show' ? g[3] : null;
+    if (name && la !== null && lo !== null && hint && inBbox(bbox, la, lo)) cleanSights.push([name, la, lo, hint]);
+  }
+  return { v: 3, bbox, sights: cleanSights, fetchedAt, lat: lat as number[], lon: lon as number[], edges: edges as number[], names: names as string[], pois: cleanPois };
 }
 
-export async function fetchOsm(fetchFn: FetchFn, now: number): Promise<CompactOsm> {
+export async function fetchOsm(fetchFn: FetchFn, now: number, area: Bbox = RESORT_BBOX, sights = false): Promise<CompactOsm> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
-    const res = await fetchFn(`${OVERPASS_URL}?data=${encodeURIComponent(overpassQuery())}`, { signal: controller.signal, headers: { Accept: 'application/json' } });
+    const res = await fetchFn(`${OVERPASS_URL}?data=${encodeURIComponent(overpassQuery(area, sights))}`, { signal: controller.signal, headers: { Accept: 'application/json' } });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return buildCompactOsm(await res.json(), now);
+    return buildCompactOsm(await res.json(), now, area);
   } finally {
     clearTimeout(timer);
   }

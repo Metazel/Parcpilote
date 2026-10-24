@@ -1,5 +1,6 @@
 import { MINUTE, parkDateKey, parkMinutesOfDay, parkWallTime } from '../domain/time';
-import type { LiveAttraction, LiveSnapshot, ParkHours, ParkId, Place } from '../domain/types';
+import type { LiveAttraction, LiveSnapshot, ParkHours, ParkId, ParkInfo, Place } from '../domain/types';
+import { destination } from './destinations';
 import { crowdFactor } from '../domain/waits';
 import { DEFAULT_HOURS } from './themeparks';
 
@@ -93,6 +94,11 @@ export interface DemoOverrides {
 /** Demo Extra Magic Hours: one hour before opening at Disneyland Park, these lands only. */
 const EMH_LANDS = new Set(['Fantasyland', 'Discoveryland']);
 
+/** The two Disneyland Paris parks, as the demo day presents them. */
+export function curatedParks(id = 'dlp'): ParkInfo[] {
+  return destination(id).parks.map((k, i) => ({ id: k.id, name: k.name, short: k.short, entrance: k.entrance, color: i }));
+}
+
 export function demoHours(now: number): Record<ParkId, ParkHours> {
   const dlpOpen = parkWallTime(now, DEFAULT_HOURS.dlp[0]);
   return {
@@ -122,6 +128,7 @@ export function demoSnapshot(now: number, catalog: ReadonlyMap<string, Place>, o
       continue;
     }
     const h = hours[place.park];
+    if (!h) continue;
     const forced = overrides.forcedDown[place.id];
     let status: LiveAttraction['status'] = 'OPERATING';
     const inEmh = h.emh !== null && now >= h.emh.open && now < h.emh.close && EMH_LANDS.has(place.land);
@@ -151,5 +158,5 @@ export function demoSnapshot(now: number, catalog: ReadonlyMap<string, Place>, o
         : null,
     };
   }
-  return { source: 'demo', fetchedAt: now, attractions, showtimes, hours };
+  return { source: 'demo', fetchedAt: now, parks: curatedParks(), attractions, showtimes, hours };
 }

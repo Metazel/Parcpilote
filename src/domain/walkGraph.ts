@@ -10,14 +10,23 @@ import type { FoodService, GeoPoint, PoiKind } from './types';
 /** POI: kind, name, lat, lon, food service ('' when not food), https link ('' when none). */
 export type CompactPoi = readonly [PoiKind, string, number, number, FoodService | '', string];
 
+/** Named attraction or show (manual-mode catalogue): name, lat, lon, kind hint. */
+export type CompactSight = readonly [string, number, number, 'ride' | 'show'];
+
+/** South, West, North, East. */
+export type Bbox = readonly [number, number, number, number];
+
 export interface CompactOsm {
-  readonly v: 2;
+  readonly v: 3;
+  /** Area the data was fetched for (positions are checked against it). */
+  readonly bbox: Bbox;
   readonly fetchedAt: number;
   readonly lat: readonly number[];
   readonly lon: readonly number[];
   readonly edges: readonly number[];
   readonly names: readonly string[];
   readonly pois: readonly CompactPoi[];
+  readonly sights: readonly CompactSight[];
 }
 
 export interface Route {

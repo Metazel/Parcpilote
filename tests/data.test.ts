@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { normalizeName, seedCatalog } from '../src/data/catalog';
-import { demoSnapshot } from '../src/data/demo';
+import { curatedParks, demoSnapshot } from '../src/data/demo';
+import { destination } from '../src/data/destinations';
 import {
   type FetchFn,
   LiveDataError,
@@ -11,10 +12,12 @@ import {
   parseChildren,
   parseDestinations,
   parseLive,
+  parkGates,
   parseSchedule,
 } from '../src/data/themeparks';
 import { MINUTE, at, catalog } from './helpers';
 
+const DLP = destination('dlp');
 const DLP_ID = 'dae968d5-630d-4719-8b06-3d107e944401';
 const DAW_ID = 'ca888437-ebb4-4d50-aed2-d227f7096968';
 
@@ -60,12 +63,12 @@ const live = {
 
 describe('ThemeParks.wiki parsing', () => {
   it('finds the Disneyland Paris parks', () => {
-    expect(parseDestinations(destinations)).toEqual([
-      { id: DLP_ID, park: 'dlp' },
-      { id: DAW_ID, park: 'daw' },
+    expect(parseDestinations(destinations, DLP)).toEqual([
+      { id: DLP_ID, park: 'dlp', name: 'Disneyland Park' },
+      { id: DAW_ID, park: 'daw', name: 'Disney Adventure World' },
     ]);
-    expect(() => parseDestinations({ destinations: [] })).toThrow(LiveDataError);
-    expect(() => parseDestinations('nope')).toThrow(LiveDataError);
+    expect(() => parseDestinations({ destinations: [] }, DLP)).toThrow(LiveDataError);
+    expect(() => parseDestinations('nope', DLP)).toThrow(LiveDataError);
   });
 
   it('keeps only well-formed attractions, shows and restaurants', () => {
@@ -104,7 +107,7 @@ describe('catalog merge', () => {
   });
 
   it('merges positions, single-rider twins and unknown entities', () => {
-    const merged = mergeCatalog(seedCatalog(), parseChildren(children).map((entity) => ({ park: 'dlp' as const, entity })));
+    const merged = mergeCatalog(seedCatalog(), parseChildren(children).map((entity) => ({ park: 'dlp' as const, entity })), parkGates(DLP, []));
     expect(merged.idMap.get('btm')).toEqual({ id: 'dlp-big-thunder', single: false });
     expect(merged.idMap.get('auto')).toEqual({ id: 'dlp-autopia', single: false });
     expect(merged.idMap.get('hsm-sr')).toEqual({ id: 'dlp-hyperspace', single: true });
@@ -116,13 +119,13 @@ describe('catalog merge', () => {
   });
 
   it('builds a snapshot with API queue options winning over the seed', () => {
-    const merged = mergeCatalog(seedCatalog(), parseChildren(children).map((entity) => ({ park: 'dlp' as const, entity })));
-    const snap = buildSnapshot(merged, parseLive(live), {}, at(10));
+    const merged = mergeCatalog(seedCatalog(), parseChildren(children).map((entity) => ({ park: 'dlp' as const, entity })), parkGates(DLP, []));
+    const snap = buildSnapshot(merged, parseLive(live), {}, at(10), curatedParks(), DLP);
     expect(snap.attractions['dlp-big-thunder']).toMatchObject({ status: 'OPERATING', standby: 45 });
     expect(snap.attractions['dlp-autopia']?.status).toBe('DOWN');
     expect(snap.attractions['dlp-hyperspace']?.singleRider).toBe(15);
     expect(merged.catalog.get('dlp-big-thunder')).toMatchObject({ premierAccess: true });
-    expect(snap.hours.dlp.close).toBe(at(22));
+    expect(snap.hours.dlp?.close).toBe(at(22));
   });
 });
 
@@ -145,19 +148,19 @@ describe('live loading', () => {
       [`/entity/${DAW_ID}/live`]: { liveData: [{ id: 'crush', name: "Crush's Coaster", entityType: 'ATTRACTION', status: 'OPERATING', queue: { STANDBY: { waitTime: 70 } } }] },
       [`/entity/${DAW_ID}/schedule`]: { schedule: [] },
     });
-    const bundle = await loadLive(fetchFn, seedCatalog(), at(10));
+    const bundle = await loadLive(fetchFn, DLP, seedCatalog(), at(10));
     expect(bundle.snapshot.source).toBe('live');
     expect(bundle.snapshot.attractions['daw-crush']?.standby).toBe(70);
     expect(bundle.snapshot.attractions['dlp-big-thunder']?.standby).toBe(45);
   });
 
   it('fails cleanly on HTTP errors and garbage', async () => {
-    await expect(loadLive(mockFetch({ '/destinations': destinations }, 500), seedCatalog(), at(10))).rejects.toBeInstanceOf(LiveDataError);
-    await expect(loadLive(mockFetch({ '/destinations': { destinations: 'x' } }), seedCatalog(), at(10))).rejects.toBeInstanceOf(LiveDataError);
+    await expect(loadLive(mockFetch({ '/destinations': destinations }, 500), DLP, seedCatalog(), at(10))).rejects.toBeInstanceOf(LiveDataError);
+    await expect(loadLive(mockFetch({ '/destinations': { destinations: 'x' } }), DLP, seedCatalog(), at(10))).rejects.toBeInstanceOf(LiveDataError);
     const throwing: FetchFn = async () => {
       throw new TypeError('Failed to fetch');
     };
-    await expect(loadLive(throwing, seedCatalog(), at(10))).rejects.toThrow('Réseau indisponible');
+    await expect(loadLive(throwing, DLP, seedCatalog(), at(10))).rejects.toThrow('Réseau indisponible');
   });
 });
 

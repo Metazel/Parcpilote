@@ -1,6 +1,7 @@
 import type { ComponentType } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { formatHM } from '../domain/time';
+import type { AppState } from '../state/store';
 import { useAppState, useStore } from './context';
 import type { Tab } from './context';
 import { BrandMark, IconGroup, IconList, IconMap, IconNow, IconRoute } from './components/Icons';
@@ -18,9 +19,17 @@ const TABS: ReadonlyArray<{ id: Tab; label: string; Icon: typeof IconNow }> = [
   { id: 'profile', label: 'Groupe', Icon: IconGroup },
 ];
 
+const STATUS_LABEL: Readonly<Record<AppState['data']['mode'], string>> = {
+  live: 'En direct',
+  offline: 'Hors-ligne',
+  demo: 'Démo',
+  manual: 'Estimé',
+  unavailable: 'Indisponible',
+};
+
 function StatusLine() {
   const { data, now } = useAppState();
-  const label = data.state === 'loading' ? 'Connexion…' : data.mode === 'live' ? 'En direct' : data.mode === 'offline' ? 'Hors-ligne' : 'Démo';
+  const label = data.state === 'loading' ? 'Connexion…' : STATUS_LABEL[data.mode];
   return (
     <p class="status" aria-live="polite">
       <span class={`status-dot ${data.mode}`} aria-hidden="true" />

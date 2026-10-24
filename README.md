@@ -1,6 +1,12 @@
 # ParcPilote
 
-Assistant de visite pour Disneyland Paris : à tout moment, la meilleure prochaine étape pour le groupe, en tenant compte des temps d'attente en direct, de la marche, des spectacles choisis, du Single Rider, du Premier Access et de la Carte Facilité. Version 0.5.0.
+Assistant de visite de parcs d'attractions : à tout moment, la meilleure prochaine étape pour le groupe, en tenant compte des temps d'attente en direct, de la marche, des spectacles choisis, des repas, du Single Rider, du Premier Access et de la Carte Facilité. Version 0.6.0.
+
+| Parc | Données |
+| --- | --- |
+| Disneyland Paris (2 parcs, référentiel détaillé, démo, Heures de Magie en Plus, Carte Facilité) | En direct |
+| Parc Astérix, Europa-Park, Futuroscope, Nigloland, Walibi Rhône-Alpes, Walibi Belgium, Walibi Holland, Gardaland, Mirabilandia, PortAventura World | En direct (liste, positions, attentes, séances et horaires lus dans le flux) |
+| Puy du Fou, Parc Spirou Provence | Mode estimé : pas de flux public ; spectacles et attractions issus d'OpenStreetMap ou ajoutés par vous, attentes estimées à corriger sur place, séances et horaires saisis depuis le programme du jour |
 
 ## Ce que fait l'application
 
@@ -16,7 +22,9 @@ Assistant de visite pour Disneyland Paris : à tout moment, la meilleure prochai
 - **Repas** : déjeuner et dîner, chacun « sur le pouce » (comptoir, kiosque, food truck), « à table » (restaurant avec service, avec heure de réservation) ou en pique-nique. Le plan choisit le lieu le plus pratique sur le parcours, ou celui que vous indiquez dans Ma liste, compte la marche et la durée moyenne (30, 75 ou 40 min, modifiables) et se cale sur la réservation. À Disneyland Paris, l'aire de pique-nique est hors des parcs : la sortie et le nouveau contrôle de sécurité (15 min) sont comptés. Restaurants à table, comptoirs et aires de pique-nique sur la carte ; lien vers le menu (OpenStreetMap) ou vers la page officielle des restaurants.
 - **Alertes** dans l'application : panne, réouverture, attente qui chute, départ pour un spectacle, données trop anciennes.
 - **Premier Access** : conseil chiffré (minutes gagnées, prix), puis saisie du créneau acheté qui devient une étape du plan.
-- **Mode démo** déterministe : journée simulée, horloge accélérée, pannes déclenchables. Il sert aussi à préparer sa visite la veille.
+- **Plusieurs parcs** : choix du parc dans Groupe (dès le premier écran) ; changer de parc recommence la journée et garde la liste de chaque parc. Pour les parcs autres que Disneyland Paris, la structure (parcs, positions des entrées) est déduite du flux en direct et la dernière liste reçue est gardée 30 jours pour les journées sans réseau. Si le flux tombe : dernières données du jour, puis mode estimé.
+- **Mode estimé** : « Ajouter une attraction ou un spectacle » (nom, type, durée), saisie des séances lues sur le programme, horaires du jour modifiables ; le plan les prend en compte comme des données en direct.
+- **Mode démo** déterministe (Disneyland Paris) : journée simulée, horloge accélérée, pannes déclenchables. Il sert aussi à préparer sa visite la veille.
 
 ## Habillage et accessibilité
 
@@ -42,7 +50,7 @@ npm run test:e2e       # recette navigateur : pip install -r e2e/requirements.tx
 ```
 src/
   domain/   modèle, temps (Europe/Paris), marche, prévision d'attente, planificateur, conseil Premier Access
-  data/     référentiel indicatif, adaptateur ThemeParks.wiki validé, simulation démo
+  data/     parcs proposés, référentiel indicatif (Disneyland Paris), adaptateur ThemeParks.wiki validé, mode estimé, simulation démo
   state/    persistance validée (localStorage), store applicatif, client du worker de planification
   workers/  calcul du plan hors du fil principal
   ui/       écrans Preact, styles, polices auto-hébergées
@@ -51,9 +59,9 @@ e2e/        recette navigateur (Playwright)
 ```
 
 - **100 % client** : aucun serveur, aucun compte.
-- **Données officielles en direct** via [ThemeParks.wiki](https://themeparks.wiki/), qui relaie le flux de Disneyland Paris : temps d'attente standard et Single Rider, statuts (ouverte, fermée, en panne, en rénovation), créneaux et prix Premier Access, horaires du parc et Heures de Magie en Plus, séances de spectacles, restaurants. Si l'API est injoignable, l'app utilise les dernières données du jour (jusqu'à 90 min) puis la démo.
+- **Données officielles en direct** via [ThemeParks.wiki](https://themeparks.wiki/), qui relaie le flux de Disneyland Paris : temps d'attente standard et Single Rider, statuts (ouverte, fermée, en panne, en rénovation), créneaux et prix Premier Access, horaires du parc et Heures de Magie en Plus, séances de spectacles, restaurants. Si l'API est injoignable, l'app utilise les dernières données du jour (jusqu'à 90 min) puis la démo (Disneyland Paris) ou le mode estimé (autres parcs).
 - **Pas d'appel direct aux points d'accès privés de l'application Disneyland Paris** : ils ne sont pas documentés, exigent des identifiants extraits de l'application et leur extraction automatisée est contraire aux conditions d'utilisation (et au droit des bases de données). Ils changent sans préavis, ce qui casserait l'app en plein parc. ThemeParks.wiki fournit les mêmes données par une API publique stable. DLPwait n'expose qu'un client Python sans API web documentée : non retenu.
-- **OpenStreetMap** : allées piétonnes, toilettes, restauration et points d'eau, téléchargés une fois via Overpass (zone fixe des parcs, jamais votre position) puis gardés 30 jours sur l'appareil. Plus court chemin (Dijkstra) sur les allées ; les routes de service privées (coulisses) sont exclues. Sans ces données, repli sur l'estimation à vol d'oiseau, signalé à l'écran.
+- **OpenStreetMap** : allées piétonnes, toilettes, restauration et points d'eau, téléchargés une fois par parc via Overpass (zone fixe autour du parc, jamais votre position ; la zone est gardée avec les données et revérifiée) puis gardés 30 jours sur l'appareil. Plus court chemin (Dijkstra) sur les allées ; les routes de service privées (coulisses) sont exclues. Sans ces données, repli sur l'estimation à vol d'oiseau, signalé à l'écran.
 - **Planificateur** : problème de tournée avec fenêtres de temps et temps dépendants de l'heure. Construction gloutonne pondérée par la priorité (avec bonus d'urgence pour les files qui vont s'allonger), puis recherche locale (insertion, suppression, déplacement, échange), évaluée par simulation complète de la journée. Hystérésis : la prochaine étape ne change que si le gain dépasse 10 min.
 - **Prévision v0.1** : temps affiché × courbe horaire générique, pondérée par l'horizon, corrigée par vos propres signalements.
 - **Marche** : distance sur les allées OpenStreetMap (sinon vol d'oiseau × 1,35), vitesse selon le rythme, ×1,2 avec poussette, +10 min pour changer de parc.
@@ -78,9 +86,9 @@ Le workflow `.github/workflows/ci.yml` vérifie, construit, teste puis publie l'
 
 | Job | Contenu |
 | --- | --- |
-| `verify` | types, lint, 108 tests unitaires, `npm audit` |
+| `verify` | types, lint, 124 tests unitaires, `npm audit` |
 | `build` | PWA (`dist/`) et fichier unique (`dist-single/`) ; artefact Pages sur `main` |
-| `e2e` | 47 scénarios Playwright (dont accessibilité RGAA), captures en artefact ; une suite en échec est rejouée une fois, les instabilités sont signalées en annotation |
+| `e2e` | 49 scénarios Playwright (dont accessibilité RGAA), captures en artefact ; une suite en échec est rejouée une fois, les instabilités sont signalées en annotation |
 | `deploy` | publication GitHub Pages (push ou lancement manuel sur `main`) |
 
 Les pull requests passent les trois premiers jobs sans publier. Un passage hebdomadaire rejoue l'audit. Les actions sont épinglées par empreinte SHA, les permissions limitées par job ; le workflow est contrôlé par `actionlint` et `zizmor`. Dependabot (`.github/dependabot.yml`) propose chaque semaine les mises à jour npm, pip et GitHub Actions, avec un délai de 14 jours.
@@ -93,6 +101,8 @@ Dépôt : [Metazel/Parcpilote](https://github.com/Metazel/Parcpilote), avec **Se
 
 ## Limites connues
 
+- Hors Disneyland Paris, tailles minimales et durées ne sont pas publiées par les flux : le filtrage par taille ne s'applique pas, la durée d'une attraction est estimée à 5 min. Les aires de pique-nique viennent d'OpenStreetMap ; celles à plus de 250 m des attractions sont supposées hors du parc (retour compté). Vérifiez le règlement du parc.
+- Puy du Fou et Parc Spirou : aucune source publique de temps d'attente ni de programme ; tout ce qui est estimé est indiqué comme tel.
 - Tailles minimales, durées, positions et options de file du référentiel sont **indicatives** ; l'API remplace positions, statuts et files en mode direct.
 - Les prix Premier Access de l'API sont lus en centimes ; le créneau acheté est supposé durer 60 min.
 - Les attractions ouvertes pendant les Heures de Magie en Plus sont celles que le flux officiel indique ouvertes ; la démo simule Fantasyland et Discoveryland.
@@ -101,4 +111,4 @@ Dépôt : [Metazel/Parcpilote](https://github.com/Metazel/Parcpilote), avec **Se
 - Groupe scindé : les enfants sont supposés accompagner le titulaire de la carte ; les tailles minimales s'appliquent à tout le groupe.
 - Pas de notifications en arrière-plan (exigent un serveur push), pas de partage communautaire des signalements : prévus en phase 2 avec la collecte d'historique.
 
-Application indépendante, non affiliée à Disney ni à Disneyland Paris.
+Application indépendante, non affiliée aux parcs proposés.
