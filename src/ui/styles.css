@@ -36,6 +36,8 @@
   --on-brass: #1b1640;
   --line-dlp: #ad1457;
   --line-daw: #0a6b62;
+  --line-2: #5b3cc4;
+  --line-3: #8a4b00;
   --line-lunch: #4f4a6e;
   --band-ink: #ffffff;
   --ticket: #1b1640;
@@ -88,6 +90,8 @@
     --brass: #f5be2e;
     --line-dlp: #f27ab0;
     --line-daw: #45cdbb;
+    --line-2: #b9a6ff;
+    --line-3: #f2b46b;
     --line-lunch: #b9b4d8;
     --band-ink: #14102e;
     --ticket: #2a245c;
@@ -122,6 +126,8 @@
   --brass: #f5be2e;
   --line-dlp: #f27ab0;
   --line-daw: #45cdbb;
+  --line-2: #b9a6ff;
+  --line-3: #f2b46b;
   --line-lunch: #b9b4d8;
   --band-ink: #14102e;
   --ticket: #2a245c;
@@ -142,6 +148,23 @@
   --poi-picnic: #9bd67a;
   --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 10px 30px -12px rgb(0 0 0 / 0.6);
   color-scheme: dark;
+}
+
+/* Each park of the destination is a "line" with its own colour. */
+.park-0 {
+  --park-line: var(--line-dlp);
+}
+
+.park-1 {
+  --park-line: var(--line-daw);
+}
+
+.park-2 {
+  --park-line: var(--line-2);
+}
+
+.park-3 {
+  --park-line: var(--line-3);
 }
 
 /* ---- base ----------------------------------------------------------- */
@@ -809,7 +832,7 @@ fieldset > legend {
 /* ---- the ticket (next step) -------------------------------------------- */
 
 .ticket {
-  --band: var(--line-dlp);
+  --band: var(--park-line, var(--line-dlp));
   --focus: var(--brass);
   position: relative;
   border-radius: var(--r-ticket);
@@ -820,9 +843,6 @@ fieldset > legend {
   isolation: isolate;
 }
 
-.ticket.daw {
-  --band: var(--line-daw);
-}
 
 .ticket.meal {
   --band: var(--line-lunch);
@@ -1103,12 +1123,8 @@ fieldset > legend {
   column-gap: 10px;
 }
 
-.stop.dlp {
-  --rail: var(--line-dlp);
-}
-
-.stop.daw {
-  --rail: var(--line-daw);
+.stop[class*='park-'] {
+  --rail: var(--park-line);
 }
 
 .stop-time {
@@ -1249,12 +1265,8 @@ fieldset > legend {
   background: var(--land-line, var(--ctl));
 }
 
-.land.dlp {
-  --land-line: var(--line-dlp);
-}
-
-.land.daw {
-  --land-line: var(--line-daw);
+.land[class*='park-'] {
+  --land-line: var(--park-line);
 }
 
 .land.meal {
@@ -1933,4 +1945,115 @@ dialog::backdrop {
   #contenu form {
     max-width: 760px;
   }
+}
+
+/* ---- Manual mode: sessions and added places ---- */
+.manual-sessions {
+  display: grid;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.manual-sessions .field-inline {
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chips li {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 2px 2px 10px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-weight: 650;
+}
+
+.chip-remove {
+  min-width: 32px;
+  min-height: 32px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink);
+  font-size: var(--fs-l);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.chip-remove:hover {
+  background: var(--rule);
+}
+
+.add-place {
+  margin: 20px 0 8px;
+  padding: 12px 14px;
+  border: 1px dashed var(--ctl);
+  border-radius: var(--r-surface);
+  background: var(--surface);
+}
+
+.add-place summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  list-style: none;
+}
+
+.add-place summary::-webkit-details-marker {
+  display: none;
+}
+
+.add-place summary::before {
+  content: '+';
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--brass);
+  color: var(--on-brass);
+  font-size: var(--fs-l);
+  line-height: 1;
+}
+
+.add-place[open] summary::before {
+  content: '−';
+}
+
+.add-place form {
+  display: grid;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.add-place .btn-primary {
+  justify-self: start;
+}
+
+.dest-select optgroup {
+  font-weight: 700;
+}
+
+.status-dot.manual {
+  background: var(--line-2);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--line-2) 22%, transparent);
+}
+
+.status-dot.unavailable {
+  background: var(--bad);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 22%, transparent);
 }

@@ -3,7 +3,8 @@ import { formatHM, parkWallTime } from '../../domain/time';
 import { EASY_ACCESS_MAX_PARTY, type GroupProfile, type MealMode, type MealPref, type MealSlot, type Pace, type ParkId } from '../../domain/types';
 import { DEFAULT_PROFILE, MEAL_WINDOWS, parseProfile } from '../../state/storage';
 import { useAppState, useStore } from '../context';
-import { MEAL_MODE_LABEL, MEAL_SLOT_LABEL, PARK_SHORT } from '../format';
+import { DESTINATIONS, type DestinationDef } from '../../data/destinations';
+import { MEAL_MODE_LABEL, MEAL_SLOT_LABEL } from '../format';
 import { ExternalLink } from '../components/ExternalLink';
 
 const PACES: ReadonlyArray<{ value: Pace; label: string }> = [
@@ -83,6 +84,7 @@ function validateDraft(d: Draft): FieldProblem[] {
 function MealFields({ slot, meal, error, onChange }: { slot: MealSlot; meal: MealDraft; error: string | null; onChange: (m: MealDraft) => void }) {
   const id = `${slot}`;
   const label = MEAL_SLOT_LABEL[slot];
+  const { resort } = useAppState();
   return (
     <div class="meal-fields">
       <label class="toggle">
@@ -131,7 +133,7 @@ function MealFields({ slot, meal, error, onChange }: { slot: MealSlot; meal: Mea
               </select>
             </div>
           </div>
-          <p class="hint">{MEAL_HINT[meal.mode]}</p>
+          <p class="hint">{meal.mode === 'picnic' ? `Aire de pique-nique : ${lowerFirst(resort.def.dining.picnicNote)}` : MEAL_HINT[meal.mode]}</p>
         </div>
       )}
     </div>
@@ -141,9 +143,50 @@ function MealFields({ slot, meal, error, onChange }: { slot: MealSlot; meal: Mea
 const MEAL_HINT: Readonly<Record<MealMode, string>> = {
   quick: "Comptoir, kiosque ou food truck : le plan choisit le plus proche du parcours, ou celui que vous indiquez dans Ma liste.",
   table: 'Restaurant à table : indiquez votre réservation dans Ma liste, le plan se cale dessus.',
-  picnic: "Aire de pique-nique : à Disneyland Paris elle est hors des parcs, la sortie et le retour au contrôle sont comptés.",
+  picnic: '',
   free: 'Une pause là où vous êtes, sans détour.',
 };
+
+const lowerFirst = (t: string) => t.charAt(0).toLowerCase() + t.slice(1);
+
+const COUNTRIES = [...new Set(DESTINATIONS.map((d) => d.country))];
+
+/** Which park the day is planned for. Takes effect at once: the list of that park comes back. */
+function DestinationPicker({ onboarding }: { onboarding: boolean }) {
+  const store = useStore();
+  const { resort, data } = useAppState();
+  const def = resort.def;
+  const mode = def.live ? 'Temps d’attente en direct quand le parc les publie.' : 'Mode estimé : attentes estimées, séances saisies par vous.';
+  return (
+    <section class="form-section" aria-labelledby="sec-dest">
+      <h2 id="sec-dest">Parc visité</h2>
+      <div class="field">
+        <label for="destination">{onboarding ? 'Où allez-vous ?' : 'Destination'}</label>
+        <select
+          id="destination"
+          class="dest-select"
+          value={def.id}
+          aria-describedby="dest-hint"
+          onChange={(e) => void store.setDestination((e.target as HTMLSelectElement).value)}
+        >
+          {COUNTRIES.map((c) => (
+            <optgroup key={c} label={c}>
+              {DESTINATIONS.filter((d) => d.country === c).map((d: DestinationDef) => (
+                <option key={d.id} value={d.id}>
+                  {d.name} ({d.place})
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+        <span class="hint" id="dest-hint">
+          {mode} Changer de parc recommence la journée ; la liste de chaque parc est gardée.
+          {data.mode === 'unavailable' && ' Données du parc inaccessibles pour le moment : une connexion est nécessaire au premier chargement.'}
+        </span>
+      </div>
+    </section>
+  );
+}
 
 function FieldError({ id, text }: { id: string; text: string | null }) {
   return text ? (
@@ -188,9 +231,47 @@ function fromDraft(d: Draft): GroupProfile | null {
   });
 }
 
+/** Manual mode: the day's opening hours, read at the gate or on the park's site. */
+function ManualHours({ open, close }: { open: number | null; close: number | null }) {
+  const store = useStore();
+  const [from, setFrom] = useState(open === null ? '' : formatHM(open));
+  const [to, setTo] = useState(close === null ? '' : formatHM(close));
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  return (
+    <section class="panel" aria-labelledby="hours-title">
+      <h3 id="hours-title">Horaires du jour</h3>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          const ok = store.setManualHours(minutesOf(from), minutesOf(to));
+          setMsg(ok ? { ok, text: 'Horaires enregistrés, plan recalculé.' } : { ok, text: 'Ouverture après 6:00, fermeture au plus tard à minuit, au moins une heure entre les deux.' });
+        }}
+        noValidate
+      >
+        <div class="row">
+          <div class="field">
+            <label for="hours-open">Ouverture</label>
+            <input id="hours-open" type="time" value={from} onInput={(e) => setFrom((e.target as HTMLInputElement).value)} />
+          </div>
+          <div class="field">
+            <label for="hours-close">Fermeture</label>
+            <input id="hours-close" type="time" value={to} onInput={(e) => setTo((e.target as HTMLInputElement).value)} />
+          </div>
+        </div>
+        <button class="btn btn-small" type="submit">
+          Enregistrer les horaires
+        </button>
+        <p class={msg && !msg.ok ? 'field-error' : 'hint'} role="status">
+          {msg?.text ?? ''}
+        </p>
+      </form>
+    </section>
+  );
+}
+
 function DataSettings() {
   const store = useStore();
-  const { persisted, data, now, plan } = useAppState();
+  const { persisted, data, now, plan, resort, snapshot } = useAppState();
   const [time, setTime] = useState('');
   const [confirmReset, setConfirmReset] = useState(false);
   const clock = persisted.settings.demoClock;
@@ -200,6 +281,7 @@ function DataSettings() {
     <>
       <section class="form-section" aria-labelledby="sec-data">
       <h2 id="sec-data">Données</h2>
+      {resort.def.features.demo ? (
       <fieldset>
         <legend>Source des temps d'attente</legend>
         <div class="segmented joined">
@@ -213,6 +295,15 @@ function DataSettings() {
           </label>
         </div>
       </fieldset>
+      ) : (
+        <p class="hint">
+          {resort.def.live
+            ? `Temps d’attente en direct pour ${resort.def.name} quand ils sont publiés ; à défaut, dernières données reçues puis mode estimé.`
+            : `${resort.def.name} ne publie pas ses temps d’attente : ils sont estimés, et vous les corrigez sur place.`}
+        </p>
+      )}
+
+      {data.mode === 'manual' && <ManualHours open={snapshot ? Object.values(snapshot.hours)[0]?.open ?? null : null} close={snapshot ? Object.values(snapshot.hours)[0]?.close ?? null : null} />}
 
       {data.mode === 'demo' && clock && (
         <section class="panel" aria-labelledby="demo-title">
@@ -306,7 +397,10 @@ function DataSettings() {
 
 export function ProfileScreen({ onboarding, onDone }: { onboarding: boolean; onDone: () => void }) {
   const store = useStore();
-  const { persisted } = useAppState();
+  const { persisted, resort } = useAppState();
+  const features = resort.def.features;
+  const parks = resort.parks;
+  const isDlp = resort.def.id === 'dlp';
   const [draft, setDraft] = useState<Draft>(() => toDraft(persisted.profile ?? DEFAULT_PROFILE));
   const [errors, setErrors] = useState<FieldProblem[]>([]);
   const [saved, setSaved] = useState(false);
@@ -320,7 +414,13 @@ export function ProfileScreen({ onboarding, onDone }: { onboarding: boolean; onD
   const submit = (e: Event) => {
     e.preventDefault();
     const found = validateDraft(draft);
-    const profile = found.length === 0 ? fromDraft(draft) : null;
+    const fixed: Draft = {
+      ...draft,
+      startPark: parks.some((p) => p.id === draft.startPark) ? draft.startPark : (parks[0]?.id ?? resort.def.id),
+      easyAccess: features.easyAccess && draft.easyAccess,
+      emhAccess: features.emh && draft.emhAccess,
+    };
+    const profile = found.length === 0 ? fromDraft(fixed) : null;
     if (!profile) {
       const list: FieldProblem[] = found.length > 0 ? found : [{ field: 'size', text: 'Vérifiez les valeurs saisies.' }];
       setErrors(list);
@@ -338,6 +438,7 @@ export function ProfileScreen({ onboarding, onDone }: { onboarding: boolean; onD
     <div>
       <h1>{onboarding ? 'Votre groupe' : 'Groupe et réglages'}</h1>
       {onboarding && <p class="muted">Quelques réglages pour calculer un itinéraire adapté à votre groupe. Tout reste sur ce téléphone.</p>}
+      <DestinationPicker onboarding={onboarding} />
       <form onSubmit={submit} noValidate>
         {errors.length > 0 && (
           <div role="alert" class="banner banner-error">
@@ -391,6 +492,8 @@ export function ProfileScreen({ onboarding, onDone }: { onboarding: boolean; onD
 
         <section class="form-section" aria-labelledby="sec-access">
           <h2 id="sec-access">Accès et files</h2>
+          {features.easyAccess ? (
+          <>
           <label class="toggle">
             <input
               type="checkbox"
@@ -406,6 +509,10 @@ export function ProfileScreen({ onboarding, onDone }: { onboarding: boolean; onD
               plan occupe ce délai avec d'autres attractions en file normale. Le titulaire passe avec 4 accompagnateurs au plus, enfants compris.
               {othersOf(draft) > 0 && ` Les ${othersOf(draft)} autres personnes font chaque attraction de leur côté et vous retrouvent à la sortie.`}
             </p>
+          )}
+          </>
+          ) : (
+            <p class="hint">Accès des personnes handicapées : chaque parc a son propre dispositif. Renseignez-vous à l’accueil de {resort.def.name} ; le plan compte ici l’attente normale.</p>
           )}
 
           <label class="toggle">
@@ -426,16 +533,20 @@ export function ProfileScreen({ onboarding, onDone }: { onboarding: boolean; onD
             </p>
           )}
 
-          <label class="toggle">
-            <input type="checkbox" checked={draft.emhAccess} aria-describedby="emh-hint" onChange={(e) => set('emhAccess', (e.target as HTMLInputElement).checked)} />
-            <span>Accès aux Heures de Magie en Plus</span>
-          </label>
-          <p class="hint field-nested" id="emh-hint">
-            Hôtels Disney et certains pass annuels : accès à quelques attractions avant l'ouverture officielle, selon les horaires publiés du jour.
-          </p>
+          {features.emh && (
+            <>
+              <label class="toggle">
+                <input type="checkbox" checked={draft.emhAccess} aria-describedby="emh-hint" onChange={(e) => set('emhAccess', (e.target as HTMLInputElement).checked)} />
+                <span>Accès aux Heures de Magie en Plus</span>
+              </label>
+              <p class="hint field-nested" id="emh-hint">
+                Hôtels Disney et certains pass annuels : accès à quelques attractions avant l'ouverture officielle, selon les horaires publiés du jour.
+              </p>
+            </>
+          )}
 
           <div class="field">
-            <label for="budget">Budget Premier Access par personne (€)</label>
+            <label for="budget">{isDlp ? 'Budget Premier Access par personne (€)' : 'Budget coupe-file payant par personne (€)'}</label>
             <input
               id="budget"
               type="number"
@@ -456,17 +567,24 @@ export function ProfileScreen({ onboarding, onDone }: { onboarding: boolean; onD
 
         <section class="form-section" aria-labelledby="sec-day">
           <h2 id="sec-day">Rythme de la journée</h2>
-          <fieldset>
-            <legend>Parc de départ</legend>
-            <div class="segmented joined">
-              {(['dlp', 'daw'] as const).map((p) => (
-                <label key={p}>
-                  <input type="radio" name="start-park" checked={draft.startPark === p} onChange={() => set('startPark', p)} />
-                  <span>{PARK_SHORT[p]}</span>
-                </label>
-              ))}
-            </div>
-          </fieldset>
+          {parks.length > 1 && (
+            <fieldset>
+              <legend>Parc de départ</legend>
+              <div class="segmented joined">
+                {parks.map((p, i) => (
+                  <label key={p.id}>
+                    <input
+                      type="radio"
+                      name="start-park"
+                      checked={draft.startPark === p.id || (i === 0 && !parks.some((x) => x.id === draft.startPark))}
+                      onChange={() => set('startPark', p.id)}
+                    />
+                    <span>{p.short}</span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          )}
 
           <fieldset>
             <legend>Rythme de marche</legend>
@@ -509,7 +627,9 @@ export function ProfileScreen({ onboarding, onDone }: { onboarding: boolean; onD
       {!onboarding && <DataSettings />}
 
       <p class="footer-note">
-        Temps d'attente en direct fournis par <ExternalLink href="https://themeparks.wiki/">ThemeParks.wiki</ExternalLink>. Application indépendante, non affiliée à Disney ni à Disneyland Paris. Tailles minimales, durées et positions sont indicatives : vérifiez-les sur place ou dans l'application officielle.
+        Temps d'attente en direct fournis par <ExternalLink href="https://themeparks.wiki/">ThemeParks.wiki</ExternalLink> ; plans et lieux © les contributeurs{' '}
+        <ExternalLink href="https://www.openstreetmap.org/copyright">OpenStreetMap</ExternalLink>. Application indépendante, non affiliée aux parcs proposés. Tailles minimales, durées,
+        horaires et positions sont indicatifs : vérifiez-les sur place ou sur le <ExternalLink href={resort.def.site}>site officiel de {resort.def.name}</ExternalLink>.
       </p>
     </div>
   );

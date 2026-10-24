@@ -26,6 +26,8 @@ export interface MapStop extends GeoPoint {
 }
 
 interface Props {
+  /** Initial centre (the park the group visits). */
+  readonly center: GeoPoint;
   readonly markers: readonly MapMarker[];
   readonly lines: readonly MapLine[];
   readonly stops: readonly MapStop[];
@@ -42,7 +44,7 @@ interface Props {
 const TILE_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 const ll = (p: GeoPoint): L.LatLngTuple => [p.lat, p.lon];
 
-export function MapView({ markers, lines, stops, me, selectedId, onSelect, fallbackNetwork, fit, fitKey }: Props) {
+export function MapView({ center, markers, lines, stops, me, selectedId, onSelect, fallbackNetwork, fit, fitKey }: Props) {
   const el = useRef<HTMLDivElement>(null);
   const map = useRef<L.Map | null>(null);
   const layers = useRef<Record<'network' | 'lines' | 'markers' | 'stops' | 'me', L.LayerGroup> | null>(null);
@@ -87,7 +89,7 @@ export function MapView({ markers, lines, stops, me, selectedId, onSelect, fallb
       stops: L.layerGroup().addTo(m),
       me: L.layerGroup().addTo(m),
     };
-    m.setView([48.8705, 2.777], 16);
+    m.setView([center.lat, center.lon], 16);
     // Exposed for tests and assistive tooling: current zoom and centre.
     const expose = () => {
       const c = m.getCenter();

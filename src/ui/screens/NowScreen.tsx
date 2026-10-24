@@ -3,8 +3,7 @@ import { MINUTE, formatHM, parkWallTime } from '../../domain/time';
 import type { PlanStep } from '../../domain/types';
 import { useAppState, useStore } from '../context';
 import type { Tab } from '../context';
-import { MEAL_MODE_LABEL, MEAL_SLOT_LABEL, PARK_SHORT, QUEUE_LABEL, STEP_LABEL, euros, inMinutes, minutes, stepTitle } from '../format';
-import { DLP_DINING } from '../../data/resort';
+import { MEAL_MODE_LABEL, MEAL_SLOT_LABEL, QUEUE_LABEL, STEP_LABEL, euros, inMinutes, minutes, parkClass, parkShort, stepTitle, whereLabel } from '../format';
 import { ExternalLink } from '../components/ExternalLink';
 
 interface Props {
@@ -12,7 +11,6 @@ interface Props {
   readonly report: (placeId: string) => void;
 }
 
-const OFFICIAL_SITE = 'https://www.disneylandparis.com/';
 
 function doneLabel(step: PlanStep): string {
   switch (step.kind) {
@@ -42,6 +40,7 @@ function OthersNote({ step }: { step: PlanStep }) {
 /** Practical notes for a meal stop: way out for a picnic, booking, menu. */
 function MealNotes({ step }: { step: PlanStep }) {
   const meal = step.meal!;
+  const { resort } = useAppState();
   return (
     <>
       {meal.reentryMin > 0 && (
@@ -53,7 +52,7 @@ function MealNotes({ step }: { step: PlanStep }) {
       {meal.mode === 'free' && <p class="queue-note">Pause où vous voulez, sans détour.</p>}
       {(meal.mode === 'quick' || meal.mode === 'table') && step.targetId && (
         <p class="queue-note">
-          <ExternalLink href={meal.url ?? DLP_DINING.restaurantsUrl}>{meal.url ? 'Voir le menu' : 'Menus sur le site officiel'}</ExternalLink>
+          <ExternalLink href={meal.url ?? resort.def.dining.restaurantsUrl}>{meal.url ? 'Voir le menu' : 'Menus sur le site officiel'}</ExternalLink>
         </p>
       )}
     </>
@@ -108,7 +107,7 @@ function NextSign({ step, now, report, go }: { step: PlanStep; now: number; repo
   const held = state.persisted.day.easyAccess;
 
   return (
-    <section class={`sign ticket ${meal ? 'meal' : step.position.park}`} aria-labelledby="next-title">
+    <section class={`sign ticket ${meal ? 'meal' : parkClass(state.resort.parks, step.position.park)}`} aria-labelledby="next-title">
       <div class="ticket-band">
         <p class="sign-kind">
           Prochaine étape : {meal ? `${MEAL_SLOT_LABEL[meal.slot].toLowerCase()}, ${MEAL_MODE_LABEL[meal.mode].toLowerCase()}` : STEP_LABEL[step.kind].toLowerCase()}
@@ -122,9 +121,9 @@ function NextSign({ step, now, report, go }: { step: PlanStep; now: number; repo
         <p class="sign-where">
           {meal
             ? step.targetId
-              ? `${PARK_SHORT[step.position.park]}${meal.reentryMin > 0 ? ', hors des parcs' : ''}`
+              ? `${parkShort(state.resort.parks, step.position.park)}${meal.reentryMin > 0 ? ', hors du parc' : ''}`
               : 'Où vous voulez, près de votre position'
-            : `${place?.land ?? ''}, ${PARK_SHORT[step.position.park]}`}
+            : whereLabel(place?.land ?? '', state.resort.parks, step.position.park)}
         </p>
       </div>
       <div class="ticket-perf" aria-hidden="true" />
@@ -225,7 +224,7 @@ function NextSign({ step, now, report, go }: { step: PlanStep; now: number; repo
 
 function PremierAccessAdvice() {
   const store = useStore();
-  const { advice, now } = useAppState();
+  const { advice, now, resort } = useAppState();
   const [open, setOpen] = useState(false);
   const [time, setTime] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -264,7 +263,7 @@ function PremierAccessAdvice() {
         Environ {advice.gainMin} min gagnées sur {advice.standbyMin} min d'attente prévue, pour {euros(advice.priceCents)} par personne (
         {euros(advice.groupPriceCents)} pour le groupe). Créneau proposé : {formatHM(advice.returnStart)}–{formatHM(advice.returnEnd)}.
       </p>
-      <p class="hint">L'achat se fait dans l'application officielle Disneyland Paris. Enregistrez ensuite le créneau ici pour l'intégrer au plan.</p>
+      <p class="hint">L'achat se fait dans l'application officielle du parc. Enregistrez ensuite le créneau ici pour l'intégrer au plan.</p>
       {open ? (
         <form onSubmit={confirm} noValidate>
           <div class="field">
@@ -290,7 +289,7 @@ function PremierAccessAdvice() {
           <button class="btn btn-small" type="button" onClick={() => setOpen(true)}>
             J'ai acheté
           </button>
-          <ExternalLink class="btn btn-quiet btn-small" href={OFFICIAL_SITE}>
+          <ExternalLink class="btn btn-quiet btn-small" href={resort.def.site}>
             Site officiel
           </ExternalLink>
         </div>
@@ -326,6 +325,22 @@ export function NowScreen({ go, report }: Props) {
   const { plan, now, persisted, snapshot } = state;
 
   if (!snapshot) {
+    if (state.data.mode === 'unavailable') {
+      return (
+        <div class="empty">
+          <h1>Données de {state.resort.def.name} inaccessibles</h1>
+          <p class="muted">{state.data.message ?? 'Une connexion est nécessaire au premier chargement de ce parc.'} Vous pouvez aussi choisir un autre parc.</p>
+          <div class="row">
+            <button class="btn btn-primary" type="button" onClick={() => void store.refresh()}>
+              Réessayer
+            </button>
+            <button class="btn" type="button" onClick={() => go('profile')}>
+              Changer de parc
+            </button>
+          </div>
+        </div>
+      );
+    }
     return (
       <div class="empty" role="status">
         <h1>Chargement des temps d'attente…</h1>
@@ -364,16 +379,18 @@ export function NowScreen({ go, report }: Props) {
         <NextSign step={first} now={now} report={report} go={go} />
       ) : (
         <div class="empty">
-          <h1>{parkClosed ? 'Les parcs sont fermés' : 'Rien d’autre de faisable'}</h1>
+          <h1>{parkClosed ? (state.resort.parks.length > 1 ? 'Les parcs sont fermés' : 'Le parc est fermé') : 'Rien d’autre de faisable'}</h1>
           <p class="muted">
             {parkClosed
               ? state.data.mode === 'demo'
                 ? 'Changez l’heure simulée dans Groupe pour rejouer la journée.'
-                : 'Le plan en direct reprendra à l’ouverture. Vous pouvez préparer votre visite sur une journée simulée.'
+                : state.resort.def.features.demo
+                  ? 'Le plan en direct reprendra à l’ouverture. Vous pouvez préparer votre visite sur une journée simulée.'
+                  : 'Le plan reprendra à l’ouverture. Préparez votre liste en attendant.'
               : 'Tout ce qui reste dans votre liste est fait, fermé ou hors de portée avant la fermeture. Ajoutez des attractions pour continuer.'}
           </p>
           <div class="row">
-            {parkClosed && state.data.mode !== 'demo' && (
+            {parkClosed && state.data.mode !== 'demo' && state.resort.def.features.demo && (
               <button class="btn btn-primary" type="button" onClick={() => store.setSource('demo')}>
                 Préparer sur une journée simulée
               </button>

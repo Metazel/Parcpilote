@@ -1,11 +1,10 @@
 import { useState } from 'preact/hooks';
-import { DLP_DINING } from '../../data/resort';
 import { haversineM } from '../../domain/geo';
 import { mealCandidates } from '../../domain/planner';
 import { formatHM, parkWallTime } from '../../domain/time';
 import type { MealSlot } from '../../domain/types';
 import { useAppState, useStore } from '../context';
-import { MEAL_MODE_LABEL, MEAL_SLOT_LABEL, PARK_SHORT } from '../format';
+import { MEAL_MODE_LABEL, MEAL_SLOT_LABEL, parkShort } from '../format';
 import { ExternalLink } from './ExternalLink';
 
 const AUTO = '';
@@ -13,7 +12,8 @@ const AUTO = '';
 /** Choice of place (and table reservation) for one meal of the day. */
 export function MealPicker({ slot }: { slot: MealSlot }) {
   const store = useStore();
-  const { persisted, pois, now } = useAppState();
+  const { persisted, pois, now, resort } = useAppState();
+  const dining = resort.def.dining;
   const pref = persisted.profile?.[slot];
   const pick = persisted.day.meals[slot] ?? { placeId: null, reservationAt: null };
   const [time, setTime] = useState('');
@@ -61,8 +61,8 @@ export function MealPicker({ slot }: { slot: MealSlot }) {
               <option value={AUTO}>Le plus pratique sur le parcours</option>
               {places.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.name} ({PARK_SHORT[p.park]}
-                  {p.outside ? ', hors des parcs' : ''})
+                  {p.name}
+                  {[resort.parks.length > 1 ? parkShort(resort.parks, p.park) : '', p.outside ? 'hors du parc' : ''].filter(Boolean).join(', ').replace(/^(.+)$/, ' ($1)')}
                 </option>
               ))}
             </select>
@@ -95,10 +95,10 @@ export function MealPicker({ slot }: { slot: MealSlot }) {
             {message}
           </p>
           {pref.mode === 'picnic' ? (
-            <p class="hint">{DLP_DINING.picnicNote}</p>
+            <p class="hint">{dining.picnicNote}</p>
           ) : (
             <p class="hint">
-              <ExternalLink href={chosen?.url ?? DLP_DINING.restaurantsUrl}>{chosen?.url ? `Menu de ${chosen.name}` : 'Restaurants et menus sur le site officiel'}</ExternalLink>
+              <ExternalLink href={chosen?.url ?? dining.restaurantsUrl}>{chosen?.url ? `Menu de ${chosen.name}` : 'Restaurants et menus sur le site officiel'}</ExternalLink>
             </p>
           )}
         </>

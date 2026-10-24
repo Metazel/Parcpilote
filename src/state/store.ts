@@ -1,18 +1,20 @@
 import { seedCatalog } from '../data/catalog';
-import { OSM_CACHE_KEY, fetchOsm, parseCompactOsm } from '../data/osm';
+import { OSM_CACHE_PREFIX, RESORT_BBOX, bboxAround, fetchOsm, parseCompactOsm } from '../data/osm';
 import { buildPois } from '../data/pois';
-import { demoSnapshot } from '../data/demo';
+import { curatedParks, demoSnapshot } from '../data/demo';
+import { type DestinationDef, destination } from '../data/destinations';
+import { MANUAL_WAIT_MIN, cachedCatalog, customPlaces, defParks, manualCatalog, manualSnapshot } from '../data/manual';
 import { type FetchFn, LiveDataError, loadLive } from '../data/themeparks';
-import { DETOUR_FACTOR, type NetworkFn, PARK_ENTRANCES, haversineM, walkMinutes } from '../domain/geo';
+import { DETOUR_FACTOR, type NetworkFn, haversineM, walkMinutes } from '../domain/geo';
 import { type Route, WalkGraph } from '../domain/walkGraph';
-import { MAX_REPEATS, type PlanInput, computePlan, wantedRides } from '../domain/planner';
+import { MAX_REPEATS, type PlanInput, computePlan, entrancesOf, wantedRides } from '../domain/planner';
 import { type PaAdvice, advisePremierAccess, remainingBudgetCents } from '../domain/premierAccess';
 import { MINUTE, formatHM, parkDateKey, parkMinutesOfDay, parkWallTime } from '../domain/time';
-import type { GeoPoint, GroupProfile, LiveSnapshot, MealSlot, ParkId, Place, Plan, PlanStep, Poi, Position, Priority } from '../domain/types';
-import { DLP_DINING } from '../data/resort';
+import type { GeoPoint, GroupProfile, LiveSnapshot, MealSlot, ParkId, ParkInfo, Place, Plan, PlanStep, Poi, Position, Priority } from '../domain/types';
 import { updateCorrection } from '../domain/waits';
 import type { PlannerClient } from './planner';
 import {
+  type CustomPlace,
   type DayProgress,
   type PersistedState,
   type Settings,
@@ -30,14 +32,22 @@ export interface Alert {
 }
 
 export interface DataStatus {
-  readonly mode: 'live' | 'demo' | 'offline';
+  /** `manual`: estimated waits and visitor entries; `unavailable`: nothing to plan with yet. */
+  readonly mode: 'live' | 'demo' | 'offline' | 'manual' | 'unavailable';
   readonly state: 'loading' | 'ok';
   readonly message: string | null;
   readonly fetchedAt: number | null;
 }
 
+/** The visited destination and its parks for the day. */
+export interface ResortView {
+  readonly def: DestinationDef;
+  readonly parks: readonly ParkInfo[];
+}
+
 export interface AppState {
   readonly persisted: PersistedState;
+  readonly resort: ResortView;
   readonly catalog: ReadonlyMap<string, Place>;
   readonly snapshot: LiveSnapshot | null;
   readonly now: number;
@@ -84,9 +94,13 @@ export class AppStore {
   private timer: ReturnType<typeof setInterval> | null = null;
   private nextLiveAttempt = 0;
   private liveFailures = 0;
-  private loading = false;
+  /** Live load in flight, per destination (a switch starts its own load). */
+  private inflight: { readonly dest: string; readonly promise: Promise<void> } | null = null;
   private lastPlanAt = 0;
   private lastDemoKey = '';
+  private lastManualKey = '';
+  /** Destination whose OpenStreetMap data is loaded. */
+  private osmDest = '';
   private readonly firedAlerts = new Set<string>();
   private officialRestaurants: ReadonlyArray<{ park: ParkId; id: string; name: string; lat: number; lon: number }> = [];
   private osmData: ReturnType<typeof parseCompactOsm> = null;
@@ -96,12 +110,14 @@ export class AppStore {
   constructor(private readonly deps: StoreDeps) {
     const real = deps.realNow();
     const persisted = loadState(deps.storage, real);
+    const def = destination(persisted.settings.destination);
     this.state = {
       persisted,
-      catalog: seedCatalog(),
+      resort: { def, parks: AppStore.knownParks(def, persisted) },
+      catalog: AppStore.initialCatalog(def, persisted),
       snapshot: null,
       now: real,
-      data: { mode: persisted.settings.source === 'demo' ? 'demo' : 'live', state: 'loading', message: null, fetchedAt: null },
+      data: { mode: persisted.settings.source === 'demo' && def.features.demo ? 'demo' : def.live ? 'live' : 'manual', state: 'loading', message: null, fetchedAt: null },
       plan: null,
       planPending: false,
       advice: null,
@@ -114,6 +130,24 @@ export class AppStore {
       pois: [],
     };
     this.state = { ...this.state, now: this.clockNow() };
+  }
+
+  /** Parks known before any data arrives: curated, manual, or from the last download. */
+  private static knownParks(def: DestinationDef, persisted: PersistedState): ParkInfo[] {
+    if (def.parks.length > 0) return def.id === 'dlp' ? curatedParks() : defParks(def);
+    const cache = persisted.catalogCache;
+    return cache && cache.dest === def.id ? [...cache.parks] : [];
+  }
+
+  private static initialCatalog(def: DestinationDef, persisted: PersistedState): Map<string, Place> {
+    if (def.id === 'dlp') return seedCatalog();
+    if (!def.live) return manualCatalog(def, [], persisted.custom);
+    const cache = persisted.catalogCache;
+    return cache && cache.dest === def.id ? cachedCatalog(cache, persisted.custom) : new Map();
+  }
+
+  private get def(): DestinationDef {
+    return this.state.resort.def;
   }
 
   // ---- subscription -------------------------------------------------------
@@ -145,7 +179,7 @@ export class AppStore {
   start(): void {
     if (this.timer) return;
     void this.refresh();
-    void this.loadOsm();
+    if (this.osmArea()) void this.loadOsm();
     this.timer = setInterval(() => this.tick(), TICK_MS);
   }
 
@@ -158,7 +192,7 @@ export class AppStore {
   private clockNow(): number {
     const real = this.deps.realNow();
     const clock = this.state.persisted.settings.demoClock;
-    if (this.state.data.mode === 'demo' && clock) return clock.base + (real - clock.realBase) * clock.speed;
+    if (this.state.data.mode === 'demo' && clock && this.def.features.demo) return clock.base + (real - clock.realBase) * clock.speed;
     return real;
   }
 
@@ -179,8 +213,25 @@ export class AppStore {
       } else if (now - this.lastPlanAt >= MINUTE) {
         this.recompute();
       }
+    } else if (this.state.data.mode === 'manual' && !this.def.live) {
+      this.manualTick();
     } else if (this.deps.realNow() >= this.nextLiveAttempt) {
       void this.refresh();
+    } else if (this.state.data.mode === 'manual') {
+      this.manualTick();
+    } else if (now - this.lastPlanAt >= MINUTE) {
+      this.recompute();
+    }
+  }
+
+  /** Manual data moves with the visitor's entries and the clock (5-minute steps). */
+  private manualTick(force = false): void {
+    const { day } = this.state.persisted;
+    const now = this.state.now;
+    const key = `${Math.floor(now / (5 * MINUTE))}|${JSON.stringify([day.manualShowtimes, day.manualWaits, day.manualHours, this.state.catalog.size])}`;
+    if (force || key !== this.lastManualKey) {
+      this.lastManualKey = key;
+      this.useSnapshot(manualSnapshot(now, this.state.catalog, this.state.resort.parks, this.def.id, day));
     } else if (now - this.lastPlanAt >= MINUTE) {
       this.recompute();
     }
@@ -188,40 +239,88 @@ export class AppStore {
 
   // ---- data ---------------------------------------------------------------
 
-  async refresh(): Promise<void> {
-    if (this.loading) return;
+  refresh(): Promise<void> {
+    const dest = this.def.id;
+    if (this.inflight?.dest === dest) return this.inflight.promise;
+    const promise = this.load().finally(() => {
+      if (this.inflight?.promise === promise) this.inflight = null;
+    });
+    this.inflight = { dest, promise };
+    return promise;
+  }
+
+  private async load(): Promise<void> {
     const { settings } = this.state.persisted;
-    if (settings.source === 'demo' || !this.deps.fetchFn) {
+    const def = this.def;
+    if (!def.live) {
+      this.enterManual(`Mode estimé : ${def.name} ne publie pas ses temps d’attente. Attentes estimées à ${MANUAL_WAIT_MIN} min, à corriger sur place depuis « Maintenant » ; saisissez les séances des spectacles dans Ma liste.`);
+      return;
+    }
+    if (def.features.demo && (settings.source === 'demo' || !this.deps.fetchFn)) {
       this.enterDemo(settings.source === 'demo' ? null : 'Temps d’attente en direct inaccessibles ici : journée de démonstration simulée.');
       return;
     }
-    this.loading = true;
+    if (!this.deps.fetchFn) {
+      this.liveUnavailable('connexion indisponible');
+      return;
+    }
     const real = this.deps.realNow();
     try {
-      const bundle = await loadLive(this.deps.fetchFn, seedCatalog(), real);
+      const bundle = await loadLive(this.deps.fetchFn, def, def.id === 'dlp' ? seedCatalog() : new Map(), real);
+      if (def.id !== this.def.id) return; // destination changed meanwhile
       this.liveFailures = 0;
       this.nextLiveAttempt = real + LIVE_REFRESH_MS;
-      const wasDemo = this.state.data.mode === 'demo';
+      const wasFallback = this.state.data.mode === 'demo' || this.state.data.mode === 'manual';
       this.officialRestaurants = bundle.restaurants;
-      this.set({ catalog: bundle.catalog, data: { mode: 'live', state: 'ok', message: null, fetchedAt: real }, now: real });
+      const catalog = new Map(bundle.catalog);
+      const park = bundle.snapshot.parks[0];
+      if (park) for (const p of customPlaces(this.state.persisted.custom, def.id, park)) catalog.set(p.id, p);
+      this.set({ catalog, resort: { def, parks: bundle.snapshot.parks }, data: { mode: 'live', state: 'ok', message: null, fetchedAt: real }, now: real });
       this.rebuildPois();
-      this.persist({ lastLive: bundle.snapshot });
-      if (wasDemo) this.pushAlert('live-back', 'info', 'Données en direct rétablies.');
+      this.persist({
+        lastLive: bundle.snapshot,
+        // Curated parks need no cache; others keep their list for offline days.
+        catalogCache: def.id === 'dlp' ? this.state.persisted.catalogCache : { dest: def.id, fetchedAt: real, places: [...bundle.catalog.values()], parks: bundle.snapshot.parks },
+      });
+      if (wasFallback) this.pushAlert('live-back', 'info', 'Données en direct rétablies.');
       this.useSnapshot(bundle.snapshot);
+      if (this.osmDest !== def.id) void this.loadOsm();
     } catch (e) {
+      if (def.id !== this.def.id) return;
       this.liveFailures++;
       this.nextLiveAttempt = real + Math.min(15, 2 ** (this.liveFailures - 1)) * MINUTE;
-      const reason = e instanceof LiveDataError ? e.message : 'Erreur inattendue';
-      const last = this.state.persisted.lastLive;
-      if (last && real - last.fetchedAt <= OFFLINE_MAX_AGE_MS) {
-        this.set({ data: { mode: 'offline', state: 'ok', message: `Temps d’attente en direct inaccessibles (${reason.toLowerCase()}) : dernières données de ${formatHM(last.fetchedAt)}.`, fetchedAt: last.fetchedAt }, now: real });
-        this.useSnapshot(last);
-      } else {
-        this.enterDemo(`Temps d’attente en direct inaccessibles (${reason.toLowerCase()}) : journée de démonstration simulée.`);
-      }
-    } finally {
-      this.loading = false;
+      this.liveUnavailable(e instanceof LiveDataError ? e.message : 'Erreur inattendue');
     }
+  }
+
+  /** Live feed down: today's last data, else the demo day (Disneyland Paris), else estimates. */
+  private liveUnavailable(reason: string): void {
+    const real = this.deps.realNow();
+    const why = reason.toLowerCase();
+    const last = this.state.persisted.lastLive;
+    if (last && real - last.fetchedAt <= OFFLINE_MAX_AGE_MS) {
+      this.set({ resort: { def: this.def, parks: last.parks }, data: { mode: 'offline', state: 'ok', message: `Temps d’attente en direct inaccessibles (${why}) : dernières données de ${formatHM(last.fetchedAt)}.`, fetchedAt: last.fetchedAt }, now: real });
+      this.useSnapshot(last);
+    } else if (this.def.features.demo) {
+      this.enterDemo(`Temps d’attente en direct inaccessibles (${why}) : journée de démonstration simulée.`);
+    } else if (this.state.catalog.size > 0 && this.state.resort.parks.length > 0) {
+      this.enterManual(`Mode estimé : temps d’attente en direct inaccessibles (${why}). Attentes estimées à ${MANUAL_WAIT_MIN} min, à corriger sur place depuis « Maintenant ».`);
+    } else {
+      this.set({ data: { mode: 'unavailable', state: 'ok', message: `Données de ${this.def.name} inaccessibles (${why}). Réessai automatique ; une première connexion est nécessaire pour ce parc.`, fetchedAt: null }, now: real });
+    }
+  }
+
+  /** Estimated waits and the visitor's entries (parks without live feed, or feed down). */
+  private enterManual(message: string): void {
+    const real = this.deps.realNow();
+    const def = this.def;
+    if (!def.live) {
+      const sights = this.osmDest === def.id && this.osmData ? this.osmData.sights : [];
+      this.set({ catalog: manualCatalog(def, sights, this.state.persisted.custom), resort: { def, parks: defParks(def) } });
+    }
+    this.set({ data: { mode: 'manual', state: 'ok', message, fetchedAt: null }, now: real });
+    if (parkDateKey(real) !== this.state.persisted.day.dateKey) this.persist({ day: emptyDay(real) });
+    this.manualTick(true);
   }
 
   private enterDemo(message: string | null): void {
@@ -234,7 +333,7 @@ export class AppStore {
       settings = { ...settings, demoClock: { base, realBase: real, speed: 1 } };
       this.persist({ settings });
     }
-    this.set({ catalog: seedCatalog(), data: { mode: 'demo', state: 'ok', message, fetchedAt: null } });
+    this.set({ catalog: seedCatalog(), resort: { def: this.def, parks: curatedParks() }, data: { mode: 'demo', state: 'ok', message, fetchedAt: null } });
     const now = this.clockNow();
     if (parkDateKey(now) !== this.state.persisted.day.dateKey) this.persist({ day: emptyDay(now) });
     this.set({ now });
@@ -266,21 +365,34 @@ export class AppStore {
 
   // ---- map data (OpenStreetMap) --------------------------------------------
 
+  /** Area to download: Disneyland Paris' plaza, else around the known parks or the park centre. */
+  private osmArea(): readonly [number, number, number, number] | null {
+    const def = this.def;
+    if (def.id === 'dlp') return RESORT_BBOX;
+    const parks = this.state.resort.parks;
+    const center = parks.length > 0 ? { lat: parks.reduce((a, p) => a + p.entrance.lat, 0) / parks.length, lon: parks.reduce((a, p) => a + p.entrance.lon, 0) / parks.length } : def.center;
+    return center ? bboxAround(center, def.radiusM) : null;
+  }
+
   /** Loads footways and service points: device cache first, then Overpass once. */
   async loadOsm(): Promise<void> {
     const now = this.deps.realNow();
+    const def = this.def;
+    const area = this.osmArea();
+    const key = `${OSM_CACHE_PREFIX}${def.id}`;
+    this.osmDest = def.id;
     let data = null;
     try {
-      const raw = this.deps.storage.getItem(OSM_CACHE_KEY);
+      const raw = this.deps.storage.getItem(key);
       if (raw && raw.length < 6_000_000) data = parseCompactOsm(JSON.parse(raw), now);
     } catch {
       data = null;
     }
-    if (!data && this.deps.fetchFn) {
+    if (!data && this.deps.fetchFn && area) {
       try {
-        data = await fetchOsm(this.deps.fetchFn, now);
+        data = await fetchOsm(this.deps.fetchFn, now, area, !def.live);
         try {
-          this.deps.storage.setItem(OSM_CACHE_KEY, JSON.stringify(data));
+          this.deps.storage.setItem(key, JSON.stringify(data));
         } catch {
           // Storage full or blocked: keep the data for this session only.
         }
@@ -288,6 +400,7 @@ export class AppStore {
         data = null;
       }
     }
+    if (def.id !== this.def.id) return; // destination changed meanwhile
     this.osmData = data;
     this.deps.planner?.setNetwork(data);
     if (!data) {
@@ -297,12 +410,19 @@ export class AppStore {
     }
     const graph = data.lat.length >= 20 ? new WalkGraph(data) : null;
     this.set({ osm: { status: graph ? 'ok' : 'unavailable', fetchedAt: data.fetchedAt }, graph });
+    // Parks without live feed take their attractions from the map data.
+    if (!def.live) {
+      this.set({ catalog: manualCatalog(def, data.sights, this.state.persisted.custom) });
+      this.rebuildPois();
+      this.manualTick(true);
+      return;
+    }
     this.rebuildPois();
     this.recompute();
   }
 
   private rebuildPois(): void {
-    this.set({ pois: buildPois(this.osmData, this.officialRestaurants, this.state.catalog) });
+    this.set({ pois: buildPois(this.osmData, this.officialRestaurants, this.state.catalog, this.def.dining) });
   }
 
   private network(): NetworkFn | undefined {
@@ -313,7 +433,8 @@ export class AppStore {
   /** Walking minutes from the group's current position (footways when known). */
   walkMinutesTo(to: Position): number {
     const profile = this.state.persisted.profile;
-    return walkMinutes(this.currentPosition(), to, { pace: profile?.pace ?? 'normal', stroller: profile?.stroller ?? false }, this.network());
+    const snapshot = this.state.snapshot;
+    return walkMinutes(this.currentPosition(), to, { pace: profile?.pace ?? 'normal', stroller: profile?.stroller ?? false }, this.network(), snapshot ? entrancesOf(snapshot) : undefined);
   }
 
   /** Route between two points for display (footways when known). */
@@ -330,8 +451,11 @@ export class AppStore {
     const { day, profile } = this.state.persisted;
     if (this.state.gps) return { ...this.state.gps, key: 'gps' };
     if (day.position) return day.position;
-    const park = profile?.startPark ?? 'dlp';
-    return { ...PARK_ENTRANCES[park], key: `gate-${park}` };
+    const parks = this.state.resort.parks;
+    const park = parks.find((p) => p.id === profile?.startPark) ?? parks[0];
+    if (park) return { ...park.entrance, park: park.id, key: `gate-${park.id}` };
+    const c = this.def.center ?? { lat: 48.87, lon: 2.777 };
+    return { ...c, park: this.def.id, key: `gate-${this.def.id}` };
   }
 
   recompute(): void {
@@ -362,7 +486,8 @@ export class AppStore {
       positionKey: pos.key,
       catalog,
       snapshot,
-      profile,
+      // Disneyland Paris programmes only count where the destination offers them.
+      profile: { ...profile, easyAccess: profile.easyAccess && this.def.features.easyAccess, emhAccess: profile.emhAccess && this.def.features.emh },
       wishes,
       repeats,
       shows: day.shows,
@@ -373,9 +498,9 @@ export class AppStore {
       dinnerDone: day.dinnerDone,
       mealPlaces: this.state.pois.filter((p) => p.kind === 'food' || p.kind === 'picnic'),
       mealPicks: day.meals,
-      reentryMin: DLP_DINING.reentryMin,
+      reentryMin: this.def.dining.reentryMin,
       corrections: persisted.corrections,
-      easyAccessReservation: profile.easyAccess ? day.easyAccess : null,
+      easyAccessReservation: profile.easyAccess && this.def.features.easyAccess ? day.easyAccess : null,
       previousNextId: prevFirst?.kind === 'ride' ? prevFirst.targetId : undefined,
       forcedNextId,
     };
@@ -618,7 +743,14 @@ export class AppStore {
 
   reportWait(id: string, actualMin: number): boolean {
     const live = this.state.snapshot?.attractions[id];
-    if (!Number.isInteger(actualMin) || actualMin < 0 || actualMin > 300 || live?.standby == null) return false;
+    if (!Number.isInteger(actualMin) || actualMin < 0 || actualMin > 300) return false;
+    if (this.state.data.mode === 'manual' && this.state.catalog.get(id)?.kind === 'ride') {
+      // No feed to correct: what the visitor sees becomes the wait for this ride.
+      this.patchDay({ manualWaits: { ...this.state.persisted.day.manualWaits, [id]: actualMin } });
+      this.manualTick(true);
+      return true;
+    }
+    if (live?.standby == null) return false;
     const corrections = { ...this.state.persisted.corrections, [id]: updateCorrection(this.state.persisted.corrections[id], live.standby, actualMin) };
     this.persist({ corrections });
     this.recompute();
@@ -685,6 +817,112 @@ export class AppStore {
     this.tick();
   }
 
+  // ---- destinations and manual mode -----------------------------------------
+
+  /** Visits another park: its own list comes back, the day starts over. */
+  setDestination(id: string): Promise<void> {
+    const next = destination(id);
+    const { persisted } = this.state;
+    if (next.id === this.def.id) return Promise.resolve();
+    const saved = { ...persisted.saved, [this.def.id]: { wishes: persisted.wishes, repeats: persisted.repeats } };
+    const back = saved[next.id] ?? { wishes: [], repeats: {} };
+    delete saved[next.id];
+    const parks = next.parks.length > 0 ? (next.id === 'dlp' ? curatedParks() : defParks(next)) : [];
+    this.planSeq++;
+    this.firedAlerts.clear();
+    this.officialRestaurants = [];
+    this.osmData = null;
+    this.osmDest = '';
+    this.liveFailures = 0;
+    this.nextLiveAttempt = 0;
+    this.lastManualKey = '';
+    this.persist({
+      settings: { ...persisted.settings, destination: next.id, source: next.features.demo ? persisted.settings.source : 'auto' },
+      wishes: back.wishes,
+      repeats: back.repeats,
+      saved,
+      day: emptyDay(this.deps.realNow()),
+      lastLive: null,
+      profile: persisted.profile ? { ...persisted.profile, startPark: parks[0]?.id ?? next.id } : null,
+    });
+    const resort = { def: next, parks: AppStore.knownParks(next, this.state.persisted) };
+    this.set({
+      resort,
+      catalog: AppStore.initialCatalog(next, this.state.persisted),
+      snapshot: null,
+      plan: null,
+      planPending: false,
+      advice: null,
+      alerts: [],
+      forcedNextId: null,
+      gps: null,
+      graph: null,
+      pois: [],
+      osm: { status: 'loading', fetchedAt: null },
+      data: { mode: next.live ? 'live' : 'manual', state: 'loading', message: null, fetchedAt: null },
+      now: this.deps.realNow(),
+    });
+    if (this.osmArea()) void this.loadOsm();
+    return this.refresh();
+  }
+
+  /** Adds a ride or show missing from the list (manual mode or incomplete feed). */
+  addCustomPlace(name: string, kind: 'ride' | 'show', durationMin: number): string | null {
+    const clean = name.trim().replace(/\s+/g, ' ');
+    if (clean.length < 2 || clean.length > 80 || !Number.isInteger(durationMin) || durationMin < 1 || durationMin > 180) return null;
+    const custom = this.state.persisted.custom;
+    if (custom.length >= 200) return null;
+    const id = `custom-${this.deps.realNow().toString(36)}${custom.length.toString(36)}`;
+    const entry: CustomPlace = { dest: this.def.id, id, name: clean, kind, durationMin };
+    this.persist({ custom: [...custom, entry] });
+    const park = this.state.resort.parks[0];
+    if (park) {
+      const catalog = new Map(this.state.catalog);
+      for (const p of customPlaces([entry], this.def.id, park)) catalog.set(p.id, p);
+      this.set({ catalog });
+    }
+    if (this.state.data.mode === 'manual') this.manualTick(true);
+    else this.recompute();
+    return id;
+  }
+
+  removeCustomPlace(id: string): void {
+    if (!id.startsWith('custom-')) return;
+    const catalog = new Map(this.state.catalog);
+    catalog.delete(id);
+    this.persist({ custom: this.state.persisted.custom.filter((c) => c.id !== id), wishes: this.state.persisted.wishes.filter(([w]) => w !== id) });
+    this.set({ catalog });
+    if (this.state.data.mode === 'manual') this.manualTick(true);
+    else this.recompute();
+  }
+
+  /** Manual mode: a show session read on the day's programme. */
+  addManualShowtime(showId: string, start: number): boolean {
+    const now = this.state.now;
+    if (this.state.catalog.get(showId)?.kind !== 'show' || !Number.isFinite(start) || parkDateKey(start) !== parkDateKey(now)) return false;
+    const list = this.state.persisted.day.manualShowtimes[showId] ?? [];
+    if (list.includes(start) || list.length >= 20) return list.includes(start);
+    this.patchDay({ manualShowtimes: { ...this.state.persisted.day.manualShowtimes, [showId]: [...list, start].sort((a, b) => a - b) } });
+    this.manualTick(true);
+    return true;
+  }
+
+  removeManualShowtime(showId: string, start: number): void {
+    const list = (this.state.persisted.day.manualShowtimes[showId] ?? []).filter((t) => t !== start);
+    const manualShowtimes = { ...this.state.persisted.day.manualShowtimes, [showId]: list };
+    this.patchDay({ manualShowtimes, shows: this.state.persisted.day.shows.filter((s) => !(s.showId === showId && s.start === start)) });
+    this.manualTick(true);
+  }
+
+  /** Manual mode: the day's opening hours (minutes after midnight). */
+  setManualHours(openMin: number, closeMin: number): boolean {
+    if (!Number.isInteger(openMin) || !Number.isInteger(closeMin) || openMin < 6 * 60 || closeMin > 24 * 60 || closeMin <= openMin + 60) return false;
+    const now = this.state.now;
+    this.patchDay({ manualHours: { open: parkWallTime(now, openMin), close: parkWallTime(now, closeMin) } });
+    this.manualTick(true);
+    return true;
+  }
+
   resetDay(): void {
     this.firedAlerts.clear();
     this.persist({ day: emptyDay(this.state.now) });
@@ -716,7 +954,8 @@ export class AppStore {
         best = place;
       }
     }
-    const gateD = Math.min(haversineM(point, PARK_ENTRANCES.dlp), haversineM(point, PARK_ENTRANCES.daw));
+    const gates = this.state.resort.parks.map((p) => p.entrance);
+    const gateD = gates.length > 0 ? Math.min(...gates.map((g) => haversineM(point, g))) : bestD;
     if (!best || gateD > GPS_MAX_DISTANCE_M) {
       if (this.state.gps) this.set({ gps: null, gpsAccuracyM: null });
       this.pushAlert('gps-far', 'info', 'Vous êtes hors des parcs : la position du téléphone sera utilisée dès votre arrivée.');

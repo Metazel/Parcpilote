@@ -1,12 +1,14 @@
-import { PARK_ENTRANCES, haversineM } from '../domain/geo';
+import { haversineM } from '../domain/geo';
 import { parkDateKey, parkWallTime } from '../domain/time';
 import type {
   Attraction,
   LiveAttraction,
   LiveSnapshot,
+  GeoPoint,
   PaState,
   ParkHours,
   ParkId,
+  ParkInfo,
   Place,
   PremierAccessOffer,
   RideStatus,
@@ -14,6 +16,7 @@ import type {
   TimeWindow,
 } from '../domain/types';
 import { normalizeName } from './catalog';
+import type { DestinationDef } from './destinations';
 import { arr, int, isRecord, isoTime, num, oneOf, safeId, str } from './validate';
 
 /**
@@ -54,32 +57,38 @@ async function getJson(fetchFn: FetchFn, path: string): Promise<unknown> {
 export interface ApiPark {
   readonly id: string;
   readonly park: ParkId;
+  readonly name: string;
 }
 
-export function parkIdFromName(name: string): ParkId | null {
-  const n = normalizeName(name);
-  if (/adventure world|studios/.test(n)) return 'daw';
-  if (/disneyland park|parc disneyland/.test(n)) return 'dlp';
-  return null;
+/** True when an API destination (slug, name) is the one described by `tokens`. */
+export function destinationMatches(slug: string, name: string, tokens: readonly string[]): boolean {
+  const label = normalizeName(`${slug.replace(/[-_]/g, ' ')} ${name}`);
+  const compact = label.replace(/ /g, '');
+  return tokens.some((t) => label.includes(t) || compact.includes(t.replace(/ /g, '')));
 }
 
-export function parseDestinations(json: unknown): ApiPark[] {
+/** The destination's parks in the API. Curated destinations map API parks to known ids. */
+export function parseDestinations(json: unknown, def: DestinationDef): ApiPark[] {
   if (!isRecord(json)) throw new LiveDataError('Réponse destinations invalide');
-  const list = arr(json.destinations) ?? [];
-  for (const d of list) {
-    if (!isRecord(d)) continue;
-    const label = `${str(d.slug) ?? ''} ${str(d.name) ?? ''}`.toLowerCase();
-    if (!/disneyland ?paris/.test(label.replace(/[-_]/g, ' ')) && !label.includes('disneylandparis')) continue;
+  if (!def.live) throw new LiveDataError('Pas de données en direct pour ce parc');
+  for (const d of arr(json.destinations) ?? []) {
+    if (!isRecord(d) || !destinationMatches(str(d.slug) ?? '', str(d.name) ?? '', def.live)) continue;
     const parks: ApiPark[] = [];
     for (const p of arr(d.parks, 20) ?? []) {
       if (!isRecord(p)) continue;
       const id = safeId(p.id);
-      const park = parkIdFromName(str(p.name) ?? '');
-      if (id && park && !parks.some((x) => x.park === park)) parks.push({ id, park });
+      const name = str(p.name, 120);
+      if (!id || !name) continue;
+      if (def.parks.length > 0) {
+        const known = def.parks.find((k) => k.match.test(normalizeName(name)));
+        if (known && !parks.some((x) => x.park === known.id)) parks.push({ id, park: known.id, name: known.name });
+      } else if (!parks.some((x) => x.park === id)) {
+        parks.push({ id, park: id, name });
+      }
     }
     if (parks.length > 0) return parks;
   }
-  throw new LiveDataError('Disneyland Paris introuvable dans l’API');
+  throw new LiveDataError(`${def.name} introuvable dans l’API`);
 }
 
 export interface ApiEntity {
@@ -199,13 +208,42 @@ export interface MergeResult {
   readonly idMap: Map<string, { id: string; single: boolean }>;
 }
 
-function sanePosition(park: ParkId, lat: number | null, lon: number | null): { lat: number; lon: number } | null {
-  if (lat === null || lon === null) return null;
-  return haversineM(PARK_ENTRANCES[park], { lat, lon }) <= MAX_DISTANCE_FROM_GATE_M ? { lat, lon } : null;
+function sanePosition(gate: GeoPoint | undefined, lat: number | null, lon: number | null): { lat: number; lon: number } | null {
+  if (lat === null || lon === null || !gate) return null;
+  return haversineM(gate, { lat, lon }) <= MAX_DISTANCE_FROM_GATE_M ? { lat, lon } : null;
+}
+
+const median = (xs: number[]) => {
+  const s = [...xs].sort((a, b) => a - b);
+  return s.length % 2 ? s[(s.length - 1) / 2]! : (s[s.length / 2 - 1]! + s[s.length / 2]!) / 2;
+};
+
+/**
+ * Where each park is: the curated gate when known, else the median position of its
+ * entities (robust to the odd misplaced one).
+ */
+export function parkGates(def: DestinationDef, entities: ReadonlyArray<{ park: ParkId; entity: ApiEntity }>): Map<ParkId, GeoPoint> {
+  const gates = new Map<ParkId, GeoPoint>();
+  for (const k of def.parks) gates.set(k.id, k.entrance);
+  const byPark = new Map<ParkId, { lat: number[]; lon: number[] }>();
+  for (const { park, entity } of entities) {
+    if (gates.has(park) || entity.lat === null || entity.lon === null) continue;
+    let b = byPark.get(park);
+    if (!b) byPark.set(park, (b = { lat: [], lon: [] }));
+    b.lat.push(entity.lat);
+    b.lon.push(entity.lon);
+  }
+  for (const [park, b] of byPark) gates.set(park, { lat: median(b.lat), lon: median(b.lon) });
+  return gates;
 }
 
 /** Merges API entities into the seed referential (seed enriches, API positions win). */
-export function mergeCatalog(seed: ReadonlyMap<string, Place>, entities: ReadonlyArray<{ park: ParkId; entity: ApiEntity }>): MergeResult {
+export function mergeCatalog(
+  seed: ReadonlyMap<string, Place>,
+  entities: ReadonlyArray<{ park: ParkId; entity: ApiEntity }>,
+  gates: ReadonlyMap<ParkId, GeoPoint>,
+  landOf: (park: ParkId) => string = () => 'Autres',
+): MergeResult {
   const catalog = new Map(seed);
   const idMap = new Map<string, { id: string; single: boolean }>();
   const seedByPark = [...seed.values()].map((p) => ({ p, key: normalizeName(p.name) }));
@@ -217,7 +255,7 @@ export function mergeCatalog(seed: ReadonlyMap<string, Place>, entities: Readonl
     if (single) key = key.replace(SINGLE_RIDER_SUFFIX, '');
     const kind = entity.type === 'SHOW' ? 'show' : 'ride';
     const match = seedByPark.find((s) => s.p.park === park && s.p.kind === kind && namesMatch(s.key, key));
-    const pos = sanePosition(park, entity.lat, entity.lon);
+    const pos = sanePosition(gates.get(park), entity.lat, entity.lon);
 
     if (match) {
       idMap.set(entity.id, { id: match.p.id, single });
@@ -225,28 +263,37 @@ export function mergeCatalog(seed: ReadonlyMap<string, Place>, entities: Readonl
       continue;
     }
     if (single) continue; // twin of an unknown ride: ignored
-    const at = pos ?? PARK_ENTRANCES[park];
+    const at = pos ?? gates.get(park);
+    if (!at) continue;
     const id = `api-${entity.id}`;
     const place: Place =
       kind === 'ride'
-        ? ({ kind, id, name: entity.name, park, land: 'Autres', lat: at.lat, lon: at.lon, durationMin: 5, minHeightCm: 0, singleRider: false, premierAccess: false, intensity: 1 } satisfies Attraction)
-        : ({ kind, id, name: entity.name, park, land: 'Autres', lat: at.lat, lon: at.lon, durationMin: 20, arriveBeforeMin: { low: 10, mid: 20, high: 30 } } satisfies Show);
+        ? ({ kind, id, name: entity.name, park, land: landOf(park), lat: at.lat, lon: at.lon, durationMin: 5, minHeightCm: 0, singleRider: false, premierAccess: false, intensity: 1 } satisfies Attraction)
+        : ({ kind, id, name: entity.name, park, land: landOf(park), lat: at.lat, lon: at.lon, durationMin: 20, arriveBeforeMin: { low: 10, mid: 20, high: 30 } } satisfies Show);
     catalog.set(id, place);
     idMap.set(entity.id, { id, single: false });
   }
   return { catalog, idMap };
 }
 
-export const DEFAULT_HOURS: Readonly<Record<ParkId, readonly [number, number]>> = {
+/** Disneyland Paris usual hours (demo day). */
+export const DEFAULT_HOURS = {
   dlp: [9 * 60 + 30, 22 * 60],
   daw: [9 * 60 + 30, 21 * 60],
-};
+} as const satisfies Readonly<Record<ParkId, readonly [number, number]>>;
+
+/** Usual hours of a park when the day's schedule is missing. */
+export function usualHours(def: DestinationDef, park: ParkId): readonly [number, number] {
+  return def.parks.find((k) => k.id === park)?.hours ?? def.hours;
+}
 
 export function buildSnapshot(
   merge: MergeResult,
   live: readonly ApiLive[],
   hours: Partial<Record<ParkId, ParkHours>>,
   now: number,
+  parks: readonly ParkInfo[],
+  def: DestinationDef,
 ): LiveSnapshot {
   const attractions: Record<string, LiveAttraction> = {};
   const singles = new Map<string, number | null>();
@@ -282,12 +329,12 @@ export function buildSnapshot(
     if (place?.kind === 'ride' && !place.singleRider) merge.catalog.set(id, { ...place, singleRider: true });
   }
 
-  const fullHours = {} as Record<ParkId, ParkHours>;
-  for (const park of ['dlp', 'daw'] as const) {
-    const [o, c] = DEFAULT_HOURS[park];
-    fullHours[park] = hours[park] ?? { open: parkWallTime(now, o), close: parkWallTime(now, c), emh: null };
+  const fullHours: Record<ParkId, ParkHours> = {};
+  for (const { id } of parks) {
+    const [o, c] = usualHours(def, id);
+    fullHours[id] = hours[id] ?? { open: parkWallTime(now, o), close: parkWallTime(now, c), emh: null };
   }
-  return { source: 'live', fetchedAt: now, attractions, showtimes, hours: fullHours };
+  return { source: 'live', fetchedAt: now, parks, attractions, showtimes, hours: fullHours };
 }
 
 export interface LiveBundle {
@@ -298,8 +345,8 @@ export interface LiveBundle {
 }
 
 /** Full live load: destination discovery, then entities, live data and schedule per park. */
-export async function loadLive(fetchFn: FetchFn, seed: ReadonlyMap<string, Place>, now: number): Promise<LiveBundle> {
-  const parks = parseDestinations(await getJson(fetchFn, '/destinations'));
+export async function loadLive(fetchFn: FetchFn, def: DestinationDef, seed: ReadonlyMap<string, Place>, now: number): Promise<LiveBundle> {
+  const parks = parseDestinations(await getJson(fetchFn, '/destinations'), def);
   const perPark = await Promise.all(
     parks.map(async ({ id, park }) => {
       const enc = encodeURIComponent(id);
@@ -311,18 +358,23 @@ export async function loadLive(fetchFn: FetchFn, seed: ReadonlyMap<string, Place
       return { park, children: parseChildren(children), live: parseLive(live), hours: parseSchedule(schedule, now) };
     }),
   );
-  const merge = mergeCatalog(
-    seed,
-    perPark.flatMap((p) => p.children.map((entity) => ({ park: p.park, entity }))),
-  );
+  const entities = perPark.flatMap((p) => p.children.map((entity) => ({ park: p.park, entity })));
+  const gates = parkGates(def, entities);
+  const names = new Map(parks.map((p) => [p.park, p.name]));
+  const merge = mergeCatalog(seed, entities, gates, (park) => names.get(park) ?? def.name);
+  const parkInfos: ParkInfo[] = parks.flatMap((p, i) => {
+    const entrance = gates.get(p.park);
+    const known = def.parks.find((k) => k.id === p.park);
+    return entrance ? [{ id: p.park, name: known?.name ?? p.name, short: known?.short ?? p.name, entrance, color: i }] : [];
+  });
   const hours: Partial<Record<ParkId, ParkHours>> = {};
   for (const p of perPark) if (p.hours) hours[p.park] = p.hours;
-  const snapshot = buildSnapshot(merge, perPark.flatMap((p) => p.live), hours, now);
+  const snapshot = buildSnapshot(merge, perPark.flatMap((p) => p.live), hours, now, parkInfos, def);
   if (Object.keys(snapshot.attractions).length === 0) throw new LiveDataError('Aucune donnée d’attente reçue');
   const restaurants: Array<LiveBundle['restaurants'][number]> = [];
   for (const p of perPark) {
     for (const e of p.children) {
-      const pos = e.type === 'RESTAURANT' ? sanePosition(p.park, e.lat, e.lon) : null;
+      const pos = e.type === 'RESTAURANT' ? sanePosition(gates.get(p.park), e.lat, e.lon) : null;
       if (pos) restaurants.push({ park: p.park, id: e.id, name: e.name, ...pos });
     }
   }

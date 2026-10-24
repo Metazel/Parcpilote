@@ -11,8 +11,11 @@ export const STROLLER_FACTOR = 1.2;
 
 const SPEED_M_PER_MIN: Readonly<Record<Pace, number>> = { slow: 55, normal: 70, fast: 83 };
 
-/** Approximate park entrances (main gates on the central plaza). */
-export const PARK_ENTRANCES: Readonly<Record<ParkId, Position>> = {
+/** Park gates by park id, for park-to-park transfers. */
+export type Entrances = Readonly<Record<ParkId, GeoPoint>>;
+
+/** Disneyland Paris gates on the central plaza (default when no other destination is given). */
+export const PARK_ENTRANCES: { readonly dlp: Position; readonly daw: Position } = {
   dlp: { lat: 48.8703, lon: 2.7797, park: 'dlp' },
   daw: { lat: 48.8681, lon: 2.7797, park: 'daw' },
 };
@@ -51,7 +54,7 @@ function speed(opts: WalkOptions): number {
 }
 
 /** Walking time in whole minutes (rounded up, 0 when already there). */
-export function walkMinutes(from: Position, to: Position, opts: WalkOptions, network?: NetworkFn): number {
+export function walkMinutes(from: Position, to: Position, opts: WalkOptions, network?: NetworkFn, entrances: Entrances = PARK_ENTRANCES): number {
   let minutes: number;
   if (from.park === to.park) {
     minutes = legMeters(from, to, network) / speed(opts);
@@ -60,9 +63,9 @@ export function walkMinutes(from: Position, to: Position, opts: WalkOptions, net
     if (direct !== null) {
       minutes = direct / speed(opts) + PARK_SWITCH_PENALTY_MIN;
     } else {
-      const exit = PARK_ENTRANCES[from.park];
-      const entry = PARK_ENTRANCES[to.park];
-      const meters = legMeters(from, exit, network) + legMeters(exit, entry, network) + legMeters(entry, to, network);
+      const exit = entrances[from.park];
+      const entry = entrances[to.park];
+      const meters = exit && entry ? legMeters(from, exit, network) + legMeters(exit, entry, network) + legMeters(entry, to, network) : legMeters(from, to, network);
       minutes = meters / speed(opts) + PARK_SWITCH_PENALTY_MIN;
     }
   }
@@ -70,13 +73,13 @@ export function walkMinutes(from: Position, to: Position, opts: WalkOptions, net
 }
 
 /** Memoised walking matrix for one planning run. */
-export function createWalkCache(opts: WalkOptions, network?: NetworkFn) {
+export function createWalkCache(opts: WalkOptions, network?: NetworkFn, entrances?: Entrances) {
   const cache = new Map<string, number>();
   return (fromKey: string, from: Position, toKey: string, to: Position): number => {
     const key = `${fromKey}>${toKey}`;
     let v = cache.get(key);
     if (v === undefined) {
-      v = walkMinutes(from, to, opts, network);
+      v = walkMinutes(from, to, opts, network, entrances);
       cache.set(key, v);
     }
     return v;

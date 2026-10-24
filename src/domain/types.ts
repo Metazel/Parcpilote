@@ -1,11 +1,18 @@
 /** Domain model shared by the planner, the data adapters and the UI. All instants are epoch ms. */
 
-export type ParkId = 'dlp' | 'daw';
+/** A park within the visited destination ('dlp', 'daw', or an id from the live feed). */
+export type ParkId = string;
 
-export const PARK_NAMES: Readonly<Record<ParkId, string>> = {
-  dlp: 'Disneyland Park',
-  daw: 'Disney Adventure World',
-};
+/** A park of the destination, as known for the day (curated or read from live data). */
+export interface ParkInfo {
+  readonly id: ParkId;
+  readonly name: string;
+  readonly short: string;
+  /** Main gate (or best estimate): start of the day and park-to-park transfers. */
+  readonly entrance: GeoPoint;
+  /** Colour slot of the park's "line" (0, 1, 2…). */
+  readonly color: number;
+}
 
 export interface GeoPoint {
   readonly lat: number;
@@ -115,7 +122,9 @@ export interface ParkHours extends TimeWindow {
 }
 
 export interface LiveSnapshot {
-  readonly source: 'live' | 'demo';
+  /** `manual`: no live feed for this park; waits estimated, show times entered by the visitor. */
+  readonly source: 'live' | 'demo' | 'manual';
+  readonly parks: readonly ParkInfo[];
   readonly fetchedAt: number;
   readonly attractions: Readonly<Record<string, LiveAttraction>>;
   /** Show id -> start instants of today's sessions, sorted. */

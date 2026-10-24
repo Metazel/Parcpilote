@@ -102,18 +102,21 @@ def overpass_grid() -> dict:
 
 
 def tile_png() -> bytes:
-    import io
+    """A 256 px grey grid map tile, encoded with the standard library only (no image dependency)."""
+    import struct
+    import zlib
 
-    from PIL import Image, ImageDraw
+    size, ground, line = 256, b"\xe8\xec\xe4", b"\xd2\xd6\xce"
+    rows = []
+    for y in range(size):
+        px = b"".join(line if (y % 32 == 0 or x % 32 == 0) else ground for x in range(size))
+        rows.append(b"\x00" + px)  # filter type 0 per scanline
 
-    img = Image.new("RGB", (256, 256), (232, 236, 228))
-    d = ImageDraw.Draw(img)
-    for k in range(0, 256, 32):
-        d.line([(k, 0), (k, 256)], fill=(210, 214, 206))
-        d.line([(0, k), (256, k)], fill=(210, 214, 206))
-    buf = io.BytesIO()
-    img.save(buf, "PNG")
-    return buf.getvalue()
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+    header = struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0)  # 8-bit RGB
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(b"".join(rows), 9)) + chunk(b"IEND", b"")
 
 
 TILE = tile_png()
@@ -124,7 +127,21 @@ def mock_api(url: str) -> dict:
     path = url.split("/v1", 1)[1]
     iso = lambda h, m=0: f"2026-10-22T{h:02d}:{m:02d}:00+02:00"  # noqa: E731
     routes = {
-        "/destinations": {"destinations": [{"id": "dlpr", "name": "Disneyland Paris", "slug": "disneylandparis", "parks": [{"id": "p-dlp", "name": "Disneyland Park"}, {"id": "p-daw", "name": "Disney Adventure World"}]}]},
+        "/destinations": {"destinations": [
+            {"id": "dlpr", "name": "Disneyland Paris", "slug": "disneylandparis", "parks": [{"id": "p-dlp", "name": "Disneyland Park"}, {"id": "p-daw", "name": "Disney Adventure World"}]},
+            {"id": "astr", "name": "Parc Astérix", "slug": "parcasterix", "parks": [{"id": "p-ast", "name": "Parc Asterix"}]},
+        ]},
+        "/entity/p-ast/children": {"children": [
+            {"id": "zeus", "name": "Tonnerre de Zeus", "entityType": "ATTRACTION", "location": {"latitude": 49.1370, "longitude": 2.5700}},
+            {"id": "goudurix", "name": "Goudurix", "entityType": "ATTRACTION", "location": {"latitude": 49.1360, "longitude": 2.5720}},
+            {"id": "oziris", "name": "OzIris", "entityType": "ATTRACTION", "location": {"latitude": 49.1350, "longitude": 2.5740}},
+        ]},
+        "/entity/p-ast/live": {"liveData": [
+            {"id": "zeus", "name": "Tonnerre de Zeus", "entityType": "ATTRACTION", "status": "OPERATING", "queue": {"STANDBY": {"waitTime": 40}}},
+            {"id": "goudurix", "name": "Goudurix", "entityType": "ATTRACTION", "status": "OPERATING", "queue": {"STANDBY": {"waitTime": 10}}},
+            {"id": "oziris", "name": "OzIris", "entityType": "ATTRACTION", "status": "DOWN"},
+        ]},
+        "/entity/p-ast/schedule": {"schedule": [{"date": "2026-10-22", "type": "OPERATING", "openingTime": iso(10), "closingTime": iso(19)}]},
         "/entity/p-dlp/children": {"children": [
             {"id": "pp", "name": "Peter Pan's Flight", "entityType": "ATTRACTION"},
             {"id": "btm", "name": "Big Thunder Mountain", "entityType": "ATTRACTION"},
@@ -358,6 +375,97 @@ def run_security(browser: Browser) -> None:
 
     sec()
     csp()
+    ctx.close()
+
+
+def onboard_at(page: Page, destination: str) -> None:
+    """Onboarding for another park: choose it first, then a group of 2 adults."""
+    page.goto(URL)
+    expect(page.get_by_role("heading", name="Votre groupe")).to_be_visible()
+    page.get_by_label("Où allez-vous ?").select_option(label=destination)
+    page.get_by_label("Nombre de personnes").fill("2")
+    page.get_by_role("button", name="Commencer la visite").click()
+    expect(page.get_by_role("heading", name="Ma liste")).to_be_visible()
+
+
+def run_parks(browser: Browser) -> None:
+    """Other parks: one with a live feed (Parc Astérix), one without (Puy du Fou, manual mode)."""
+    axe = Path(os.environ.get("AXE_PATH", ROOT / "node_modules/axe-core/axe.min.js")).read_text()
+    ctx, page, errors = new_page(browser, live_mock=True)
+
+    @scenario("Autres parcs : Parc Astérix en direct, sans options propres à Disney")
+    def asterix():
+        page.clock.set_fixed_time(DAY_10H)
+        onboard_at(page, "Parc Astérix (Plailly)")
+        expect(page.locator(".status")).to_contain_text("En direct")
+        expect(page.get_by_role("group", name="Tonnerre de Zeus").locator(".item-meta")).to_contain_text("40 min")
+        expect(page.get_by_role("group", name="OzIris").locator(".item-meta")).to_contain_text("En panne")
+        assert page.get_by_role("radiogroup", name="Parc").count() == 0, "filtre de parc affiché pour un parc unique"
+        set_priority(page, "Tonnerre de Zeus", "Incontournable")
+        set_priority(page, "Goudurix", "Si possible")
+        tab(page, "Maintenant")
+        expect(page.locator("#next-title")).to_have_text(re.compile("Tonnerre de Zeus|Goudurix"))
+        tab(page, "Groupe")
+        expect(page.get_by_label("Destination")).to_have_value("asterix")
+        assert page.get_by_text("Carte Facilité").count() == 0
+        assert page.get_by_text("Heures de Magie en Plus").count() == 0
+        assert page.get_by_role("radio", name="Démonstration").count() == 0
+        expect(page.get_by_label("Budget coupe-file payant par personne (€)")).to_be_visible()
+        # Back to Disneyland Paris: its own list comes back.
+        page.get_by_label("Destination").select_option("dlp")
+        tab(page, "Ma liste")
+        expect(page.get_by_role("radiogroup", name="Parc")).to_be_visible()
+        tab(page, "Groupe")
+        page.get_by_label("Destination").select_option("asterix")
+        tab(page, "Ma liste")
+        expect(page.get_by_role("radiogroup", name="Priorité pour Tonnerre de Zeus").get_by_role("radio", name="Incontournable", exact=True)).to_be_checked()
+        assert not [e for e in errors if "dialog" in e], errors
+        shot(page, "20-asterix")
+
+    asterix()
+    ctx.close()
+
+    ctx, page, errors = new_page(browser, live_mock=True, bypass_csp=True)
+
+    @scenario("Autres parcs : Puy du Fou en mode estimé (spectacle et séance saisis)")
+    def puy():
+        page.clock.set_fixed_time(DAY_10H)
+        onboard_at(page, "Puy du Fou (Les Epesses)")
+        expect(page.locator(".status")).to_contain_text("Estimé")
+        expect(page.locator(".banner").first).to_contain_text("Mode estimé")
+        add = page.locator("details.add-place")
+        if add.get_attribute("open") is None:
+            add.locator("summary").click()
+        page.get_by_label("Nom", exact=True).fill("Le Signe du Triomphe")
+        page.get_by_label("Durée (minutes)").fill("35")
+        page.get_by_role("button", name="Ajouter", exact=True).click()
+        show = page.get_by_role("group", name="Le Signe du Triomphe")
+        expect(show).to_be_visible()
+        show.get_by_label("Séance du programme").fill("14:30")
+        show.get_by_role("button", name="Ajouter la séance").click()
+        show.get_by_role("radiogroup", name="Séance de Le Signe du Triomphe").get_by_role("radio", name="14:30").check()
+        tab(page, "Plan")
+        expect(page.locator("main")).to_contain_text("Le Signe du Triomphe")
+        expect(page.locator("main")).to_contain_text("14:30")
+        tab(page, "Groupe")
+        expect(page.get_by_role("heading", name="Horaires du jour")).to_be_visible()
+        page.get_by_label("Fermeture").fill("20:00")
+        page.get_by_role("button", name="Enregistrer les horaires").click()
+        expect(page.get_by_text("Horaires enregistrés, plan recalculé.")).to_be_visible()
+        problems = []
+        for name in ("Ma liste", "Groupe"):
+            tab(page, name)
+            page.wait_for_timeout(150)
+            page.add_script_tag(content=axe)
+            res = page.evaluate("axe.run(document, { runOnly: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] })")
+            for v in res["violations"]:
+                if v["impact"] in ("serious", "critical", "moderate"):
+                    problems.append(f"{name}: {v['id']} ({len(v['nodes'])}) {v['nodes'][0]['target']}")
+        assert not problems, " | ".join(problems)
+        assert not [e for e in errors if "dialog" in e], errors
+        shot(page, "21-puy-du-fou")
+
+    puy()
     ctx.close()
 
 
@@ -840,7 +948,7 @@ def run_meals(browser: Browser) -> None:
         tab(page, "Carte")
         expect(page.locator(".layers").get_by_label("Pique-nique")).to_be_checked()
         page.get_by_role("radiogroup", name="Type de lieu à proximité").get_by_role("radio", name="Pique-nique").check()
-        expect(page.locator("ul.nearby")).to_contain_text("hors des parcs")
+        expect(page.locator("ul.nearby")).to_contain_text("hors du parc")
         page.get_by_role("radiogroup", name="Type de lieu à proximité").get_by_role("radio", name="Restauration").check()
         expect(page.locator("ul.nearby")).to_contain_text("à table")
 
@@ -927,7 +1035,7 @@ def main() -> int:
         with sync_playwright() as p:
             # --disable-dev-shm-usage: CI containers often have a tiny /dev/shm.
             browser = p.chromium.launch(args=["--disable-dev-shm-usage"])
-            for suite in (run, run_security, run_live, run_map, run_a11y, run_easy, run_meals, run_rgaa, run_single):
+            for suite in (run, run_security, run_live, run_parks, run_map, run_a11y, run_easy, run_meals, run_rgaa, run_single):
                 flaky += run_suite(suite, browser)
             browser.close()
     finally:

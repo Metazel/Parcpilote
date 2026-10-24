@@ -7,8 +7,11 @@ import type { FoodService, ParkId } from '../domain/types';
  * October 2026. Table-service names are matched loosely (accents, case, punctuation).
  */
 export interface ResortDining {
-  /** Where a packed lunch may be eaten: in the parks, or only outside the gates. */
-  readonly picnic: 'inside' | 'outside';
+  /**
+   * Where a packed lunch may be eaten: in the parks, only outside the gates, or unknown
+   * (`auto`: a picnic area far from every attraction is taken as outside the gates).
+   */
+  readonly picnic: 'inside' | 'outside' | 'auto';
   /** Leaving the parks and coming back through security, in minutes (picnic outside). */
   readonly reentryMin: number;
   readonly picnicNote: string;

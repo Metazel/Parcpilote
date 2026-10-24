@@ -1,7 +1,27 @@
 import { MINUTE, formatHM } from '../domain/time';
-import type { FoodService, LiveAttraction, MealMode, MealSlot, ParkId, PlanStep, PoiKind, QueueKind, StepKind, UnplannedReason } from '../domain/types';
+import type { FoodService, LiveAttraction, MealMode, MealSlot, ParkId, ParkInfo, PlanStep, PoiKind, QueueKind, StepKind, UnplannedReason } from '../domain/types';
 
-export const PARK_SHORT: Readonly<Record<ParkId, string>> = { dlp: 'Disneyland Park', daw: 'Adventure World' };
+/** Short name of a park of the destination. */
+export function parkShort(parks: readonly ParkInfo[], id: ParkId): string {
+  return parks.find((p) => p.id === id)?.short ?? '';
+}
+
+/** Full name of a park of the destination. */
+export function parkName(parks: readonly ParkInfo[], id: ParkId): string {
+  return parks.find((p) => p.id === id)?.name ?? '';
+}
+
+/** CSS class carrying the park's line colour. */
+export function parkClass(parks: readonly ParkInfo[], id: ParkId): string {
+  return `park-${(parks.find((p) => p.id === id)?.color ?? 0) % 4}`;
+}
+
+/** "Land, Park", without repeating the park when the land is the park itself. */
+export function whereLabel(land: string, parks: readonly ParkInfo[], id: ParkId): string {
+  const park = parkShort(parks, id);
+  if (!park || land === park || land === parkName(parks, id)) return land || park;
+  return parks.length > 1 ? `${land}, ${park}` : land;
+}
 
 export const STEP_LABEL: Readonly<Record<StepKind, string>> = {
   ride: 'Attraction',
