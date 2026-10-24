@@ -91,6 +91,9 @@ export function App() {
   const firstRender = useRef(true);
   useGps(state.persisted.settings.useGps);
 
+  const onboarding = state.persisted.profile === null;
+  const viewLabel = onboarding ? 'Votre groupe' : (TABS.find((t) => t.id === tab)?.label ?? '');
+
   useEffect(() => {
     if (firstRender.current) {
       firstRender.current = false;
@@ -100,10 +103,17 @@ export function App() {
     window.scrollTo(0, 0);
   }, [tab]);
 
-  const onboarding = state.persisted.profile === null;
+  // Each view has its own page title (RGAA 8.6).
+  useEffect(() => {
+    document.title = `${viewLabel} – ParcPilote`;
+  }, [viewLabel]);
 
   return (
-    <div class="app">
+    <div class={`app${onboarding ? ' app-onboarding' : ''}`}>
+      <div class="skip-links">
+        <a href="#contenu">Aller au contenu</a>
+        {!onboarding && <a href="#navigation">Aller à la navigation</a>}
+      </div>
       <header class="topbar">
         <span class="brand">
           <BrandMark class="brand-mark" />
@@ -111,13 +121,27 @@ export function App() {
         </span>
         <StatusLine />
       </header>
-      {state.data.message && (
-        <p class="banner" role="status">
-          {state.data.message}
-        </p>
+      {!onboarding && (
+        <nav class="tabbar" id="navigation" aria-label="Navigation principale">
+          <ul>
+            {TABS.map(({ id, label, Icon }) => (
+              <li key={id}>
+                <button type="button" aria-current={tab === id ? 'page' : undefined} onClick={() => setTab(id)}>
+                  <Icon />
+                  <span>{label}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </nav>
       )}
-      {!onboarding && <Alerts />}
-      <main ref={mainRef} tabIndex={-1} aria-label={onboarding ? 'Profil du groupe' : TABS.find((t) => t.id === tab)?.label}>
+      <main ref={mainRef} id="contenu" tabIndex={-1} aria-label={viewLabel}>
+        {state.data.message && (
+          <p class="banner" role="status">
+            {state.data.message}
+          </p>
+        )}
+        {!onboarding && <Alerts />}
         {onboarding ? (
           <ProfileScreen onboarding onDone={() => setTab('list')} />
         ) : tab === 'now' ? (
@@ -132,20 +156,6 @@ export function App() {
           <ProfileScreen onboarding={false} onDone={() => undefined} />
         )}
       </main>
-      {!onboarding && (
-        <nav class="tabbar" aria-label="Navigation principale">
-          <ul>
-            {TABS.map(({ id, label, Icon }) => (
-              <li key={id}>
-                <button type="button" aria-current={tab === id ? 'page' : undefined} onClick={() => setTab(id)}>
-                  <Icon />
-                  {label}
-                </button>
-              </li>
-            ))}
-          </ul>
-        </nav>
-      )}
       <ReportDialog placeId={reportId} onClose={() => setReportId(null)} />
     </div>
   );

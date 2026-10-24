@@ -83,12 +83,15 @@ export default defineConfig(({ mode }) => {
   const isSingle = mode === 'single';
   return {
     base: './',
+    // The single-file build cannot ship a separate worker file: plans are computed in place.
+    resolve: isSingle ? { alias: [{ find: /^\.\/state\/workerPlanner$/, replacement: './state/workerPlanner.single' }] } : {},
     plugins: [preact(), pwaHtml(isSingle), ...(isSingle ? [viteSingleFile()] : [serviceWorker()])],
     define: {
       __PWA__: JSON.stringify(!isSingle),
     },
     // Static files copied as-is into the PWA build (kept out of "public/", a name some hosts reserve for their output).
     publicDir: isSingle ? false : 'static',
+    worker: { format: 'es' },
     build: {
       outDir: isSingle ? 'dist-single' : 'dist',
       target: 'es2022',

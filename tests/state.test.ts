@@ -313,3 +313,47 @@ describe('Carte Facilité, repeated rides and split group: persistence and store
     expect(store.getState().persisted.repeats).toEqual({});
   });
 });
+
+describe('off-thread planner', () => {
+  it('shows the next step at once, ignores stale answers and keeps the latest plan', async () => {
+    const { computePlan } = await import('../src/domain/planner');
+    const queue: Array<() => void> = [];
+    const planner = {
+      plan: (req: Parameters<typeof computePlan>[0]) => new Promise<ReturnType<typeof computePlan>>((resolve) => queue.push(() => resolve(computePlan(req)))),
+      setNetwork: () => undefined,
+    };
+    const storage = new MemoryStorage();
+    const s = new AppStore({ storage, fetchFn: null, realNow: () => at(10), planner });
+    await s.refresh();
+    const flush = async () => {
+      while (queue.length) queue.shift()!();
+      await Promise.resolve();
+      await Promise.resolve();
+    };
+    s.saveProfile({ ...DEFAULT_PROFILE, lunch: { ...DEFAULT_PROFILE.lunch, enabled: false } });
+    s.setWish('dlp-peter-pan', 'must');
+    s.setWish('dlp-buzz', 'must');
+    expect(s.getState().planPending).toBe(true);
+    await flush();
+    const state = s.getState();
+    expect(state.planPending).toBe(false);
+    const [first, second] = state.plan!.steps;
+    // Completing a step removes it immediately, before the new plan arrives.
+    s.completeStep(first!);
+    expect(s.getState().plan!.steps[0]).toBe(second);
+    expect(s.getState().planPending).toBe(true);
+    // Two requests in flight: only the latest is applied, whatever the answer order.
+    s.setWish('dlp-dumbo', 'nice');
+    const [older, newer] = [queue.shift()!, queue.shift()!];
+    newer();
+    await Promise.resolve();
+    await Promise.resolve();
+    const latest = s.getState().plan;
+    older();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(s.getState().plan).toBe(latest);
+    expect(latest!.steps.map((x) => x.targetId)).toContain('dlp-dumbo');
+    s.stop();
+  });
+});
