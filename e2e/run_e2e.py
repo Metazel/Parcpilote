@@ -268,7 +268,7 @@ def run(browser: Browser) -> None:
         tab(page, "Maintenant")
         panel = page.locator("section.panel", has_text="Premier Access conseillé")
         expect(panel).to_be_visible()
-        name = panel.locator("h2").inner_text().replace("Premier Access conseillé : ", "")
+        name = re.split(r"\s*:\s*", panel.locator("h2").inner_text(), maxsplit=1)[1]
         assert re.search(r"\d+ min gagnées", panel.inner_text())
         shot(page, "06-premier-access")
         panel.get_by_role("button", name="J'ai acheté").click()
