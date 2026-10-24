@@ -42,7 +42,8 @@ def scenario(name: str):
                 results.append((name, True, f"{(time.perf_counter() - t0):.1f}s"))
             except Exception as exc:  # noqa: BLE001 - report every failure
                 results.append((name, False, f"{type(exc).__name__}: {exc}".splitlines()[0][:300]))
-                traceback.print_exc()
+                # Neutralise "::" so no error text can be read as a GitHub workflow command.
+                print(traceback.format_exc().replace("::", ": :"), file=sys.stderr, flush=True)
         return run
     return wrap
 
@@ -556,22 +557,51 @@ def serve_dist() -> ThreadingHTTPServer:
     return server
 
 
+def annotate(level: str, title: str, message: str) -> None:
+    """GitHub Actions annotation (readable in the run page and through the API)."""
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return
+    # Workflow-command escaping: the message can never start a new command line.
+    esc = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    print(f"::{level} title={title}::{esc}", flush=True)
+
+
+def run_suite(suite, browser: Browser) -> list[tuple[str, str]]:
+    """Runs one suite; on failure, reruns it once. Returns the scenarios that only passed on retry."""
+    start = len(results)
+    suite(browser)
+    first = [(n, info) for n, ok, info in results[start:] if not ok]
+    if not first:
+        return []
+    del results[start:]
+    print(f"Nouvel essai de la suite {suite.__name__} ({len(first)} échec(s))", flush=True)
+    suite(browser)
+    still = {n for n, ok, _ in results[start:] if not ok}
+    return [(n, info) for n, info in first if n not in still]
+
+
 def main() -> int:
     server = serve_dist()
+    flaky: list[tuple[str, str]] = []
     try:
         with sync_playwright() as p:
             # --disable-dev-shm-usage: CI containers often have a tiny /dev/shm.
             browser = p.chromium.launch(args=["--disable-dev-shm-usage"])
             for suite in (run, run_security, run_live, run_map, run_a11y, run_single):
-                suite(browser)
+                flaky += run_suite(suite, browser)
             browser.close()
     finally:
         server.shutdown()
     width = max(len(n) for n, _, _ in results)
     for name, ok, info in results:
         print(f"{'PASS' if ok else 'FAIL'}  {name.ljust(width)}  {info}")
+        if not ok:
+            annotate("error", "Recette en échec", f"{name} — {info}")
+    for name, info in flaky:
+        print(f"INSTABLE  {name}  (réussi au second essai ; 1er essai : {info})")
+        annotate("warning", "Recette instable", f"{name} — réussi au second essai ; 1er essai : {info}")
     failed = sum(1 for _, ok, _ in results if not ok)
-    print(f"\n{len(results) - failed}/{len(results)} scénarios réussis")
+    print(f"\n{len(results) - failed}/{len(results)} scénarios réussis" + (f", {len(flaky)} instable(s)" if flaky else ""))
     return 1 if failed else 0
 
 

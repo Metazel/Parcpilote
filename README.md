@@ -68,7 +68,7 @@ Le workflow `.github/workflows/ci.yml` vérifie, construit, teste puis publie l'
 | --- | --- |
 | `verify` | types, lint, 77 tests unitaires, `npm audit` |
 | `build` | PWA (`dist/`) et fichier unique (`dist-single/`) ; artefact Pages sur `main` |
-| `e2e` | 24 scénarios Playwright, captures en artefact |
+| `e2e` | 24 scénarios Playwright, captures en artefact ; une suite en échec est rejouée une fois, les instabilités sont signalées en annotation |
 | `deploy` | publication GitHub Pages (push ou lancement manuel sur `main`) |
 
 Les pull requests passent les trois premiers jobs sans publier. Un passage hebdomadaire rejoue l'audit. Les actions sont épinglées par empreinte SHA, les permissions limitées par job ; le workflow est contrôlé par `actionlint` et `zizmor`. Dependabot (`.github/dependabot.yml`) propose chaque semaine les mises à jour npm, pip et GitHub Actions, avec un délai de 14 jours.
