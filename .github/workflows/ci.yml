@@ -1,8 +1,8 @@
 # ParcPilote — vérification, recette et publication sur GitHub Pages.
 #
-#   verify  : types, lint, 94 tests unitaires, audit npm
+#   verify  : types, lint, 108 tests unitaires, audit npm
 #   build   : PWA (dist/) et fichier unique (dist-single/) ; prépare l'artefact Pages sur main
-#   e2e     : 43 scénarios Playwright (dont RGAA), captures en artefact
+#   e2e     : 47 scénarios Playwright (dont RGAA), captures en artefact
 #   deploy  : publication GitHub Pages (push ou lancement manuel sur main uniquement)
 #
 # Variable de dépôt utile (Settings > Secrets and variables > Actions > Variables) :

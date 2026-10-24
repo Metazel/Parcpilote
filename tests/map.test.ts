@@ -49,7 +49,7 @@ describe('OpenStreetMap parsing', () => {
   });
 
   it('keeps the largest component', () => {
-    const tiny: CompactOsm = { v: 1, fetchedAt: NOW, lat: [48.87, 48.8701, 48.8702, 48.875, 48.8751], lon: [2.77, 2.77, 2.77, 2.78, 2.78], edges: [0, 1, -1, 1, 2, -1, 3, 4, -1], names: [], pois: [] };
+    const tiny: CompactOsm = { v: 2, fetchedAt: NOW, lat: [48.87, 48.8701, 48.8702, 48.875, 48.8751], lon: [2.77, 2.77, 2.77, 2.78, 2.78], edges: [0, 1, -1, 1, 2, -1, 3, 4, -1], names: [], pois: [] };
     expect(keepMainComponent(tiny).lat).toHaveLength(3);
   });
 });

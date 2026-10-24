@@ -1,4 +1,4 @@
-import { type NetworkFn, createWalkCache } from './geo';
+import { type NetworkFn, createWalkCache, haversineM } from './geo';
 import { MINUTE, minuteOfDayFn, parkWallTime } from './time';
 import {
   type Attraction,
@@ -6,11 +6,15 @@ import {
   type EasyAccessReservation,
   type GroupProfile,
   type LiveSnapshot,
+  type MealMode,
+  type MealPick,
+  type MealSlot,
   type OthersPlan,
   type PaBooking,
   type Place,
   type Plan,
   type PlanStep,
+  type Poi,
   type Position,
   type Priority,
   type QueueKind,
@@ -56,7 +60,13 @@ export const OTHERS_REGROUP_TOLERANCE_MIN = 10;
 export const UNKNOWN_WAIT_MIN = 15;
 /** The next step only changes if the new plan saves more than this (minutes). */
 export const HYSTERESIS_MIN = 10;
-/** Lunch may slip this long after the preferred time (minutes). */
+/** A table reservation is kept if the group arrives at most this late (minutes). */
+export const RESERVATION_GRACE_MIN = 10;
+/** Default extra time to leave the park and pass security again (picnic outside the gates). */
+export const DEFAULT_REENTRY_MIN = 15;
+/** Candidate eateries examined for an unpicked meal (nearest by straight line). */
+const MEAL_CANDIDATES = 5;
+/** A meal may slip this long after the preferred time (minutes). */
 export const LUNCH_SLACK_MIN = 60;
 
 const WEIGHT_SCALE = 10_000;
@@ -85,6 +95,13 @@ export interface PlanInput {
   /** Ride id → rides already done today. */
   readonly doneCounts?: ReadonlyMap<string, number> | undefined;
   readonly lunchDone: boolean;
+  readonly dinnerDone?: boolean | undefined;
+  /** Food and picnic places (official feed and OpenStreetMap). */
+  readonly mealPlaces?: readonly Poi[] | undefined;
+  /** Place (and table reservation) chosen for each meal. */
+  readonly mealPicks?: Readonly<Partial<Record<MealSlot, MealPick>>> | undefined;
+  /** Leaving the gates for a picnic and coming back through security (minutes). */
+  readonly reentryMin?: number | undefined;
   readonly corrections: Readonly<Record<string, WaitCorrection>>;
   /** Carte Facilité registration currently held, if any. */
   readonly easyAccessReservation?: EasyAccessReservation | null | undefined;
@@ -99,7 +116,20 @@ export interface PlanInput {
 type Anchor =
   | { readonly type: 'show'; readonly key: string; readonly show: Show; readonly start: number; readonly deadline: number }
   | { readonly type: 'pa'; readonly key: string; readonly ride: Attraction; readonly booking: PaBooking }
-  | { readonly type: 'lunch'; readonly key: string; readonly earliest: number; readonly latest: number; readonly durationMin: number };
+  | {
+      readonly type: 'meal';
+      readonly key: string;
+      readonly slot: MealSlot;
+      readonly mode: MealMode;
+      readonly earliest: number;
+      readonly latest: number;
+      readonly durationMin: number;
+      /** Table reservation time, if booked. */
+      readonly fixedAt: number | null;
+      /** The chosen place, else candidates the simulator picks from (nearest on the route). */
+      readonly picked: Poi | null;
+      readonly candidates: readonly Poi[];
+    };
 
 /**
  * One ride of one attraction. `key` is unique (`id#occurrence`).
@@ -151,8 +181,8 @@ function anchorDeadline(a: Anchor): number {
       return a.deadline;
     case 'pa':
       return a.booking.returnEnd;
-    case 'lunch':
-      return a.latest;
+    case 'meal':
+      return a.fixedAt ?? a.latest;
   }
 }
 
@@ -190,6 +220,26 @@ class Simulator {
     this.minuteOfDay = minuteOfDayFn(input.now);
     this.nowMin = this.minuteOfDay(input.now);
     this.now = input.now;
+  }
+
+  private get reentryMin(): number {
+    return this.input.reentryMin ?? DEFAULT_REENTRY_MIN;
+  }
+
+  /** Nearest eatery by walking time among the closest ones by straight line. */
+  private nearestPlace(candidates: readonly Poi[], posKey: string, pos: Position): Poi | null {
+    if (candidates.length === 0) return null;
+    const near = [...candidates].sort((x, y) => haversineM(pos, x) - haversineM(pos, y)).slice(0, MEAL_CANDIDATES);
+    let best: Poi | null = null;
+    let bestMin = Infinity;
+    for (const c of near) {
+      const m = this.walk(posKey, pos, c.id, c);
+      if (m < bestMin) {
+        bestMin = m;
+        best = c;
+      }
+    }
+    return best;
   }
 
   /** Forecast standby wait, memoised per ride and arrival minute. */
@@ -279,6 +329,7 @@ class Simulator {
         rep: 0,
         returnAt,
         others: null,
+        meal: null,
       });
       held = { key: next.key, returnAt };
       t = endAt;
@@ -343,6 +394,7 @@ class Simulator {
           rep: (this.repBase.get(ride.id) ?? 0) + n,
           returnAt: null,
           others,
+          meal: null,
         });
         weight += item.weight;
         t = endAt;
@@ -352,27 +404,50 @@ class Simulator {
       }
 
       const a = item.anchor;
-      if (a.type === 'lunch') {
-        const startAt = Math.max(t, a.earliest);
-        if (startAt > a.latest) missed++;
+      if (a.type === 'meal') {
+        const place = a.picked ?? this.nearestPlace(a.candidates, posKey, pos);
+        const walk = place ? this.walk(posKey, pos, place.id, place) : 0;
+        const arrive = t + walk * MINUTE;
+        let startAt: number;
+        let latest: number;
+        if (a.fixedAt !== null) {
+          // Booked table: be there on time. Lateness is only accepted when it cannot be avoided
+          // (reservation too close to make it from here), and never beyond the grace period.
+          startAt = Math.max(arrive, a.fixedAt);
+          latest = a.fixedAt - walk * MINUTE;
+          const soonest = place ? now + this.walk(this.input.positionKey, this.input.position, place.id, place) * MINUTE : now;
+          if (arrive > Math.max(a.fixedAt, soonest) || arrive > a.fixedAt + RESERVATION_GRACE_MIN * MINUTE) missed++;
+        } else {
+          startAt = Math.max(arrive, a.earliest);
+          latest = a.latest - walk * MINUTE;
+          if (startAt > a.latest) missed++;
+        }
+        // A picnic outside the gates: way out, then security again on the way back in.
+        const reentryMin = place?.outside ? this.reentryMin : 0;
+        const endAt = startAt + (a.durationMin + reentryMin) * MINUTE;
         steps.push({
-          kind: 'lunch',
-          targetId: '',
-          name: 'Pause repas',
-          position: pos,
+          kind: 'meal',
+          targetId: place?.id ?? '',
+          name: place?.name ?? (a.slot === 'lunch' ? 'Pause déjeuner' : 'Pause dîner'),
+          position: place ?? pos,
           departAt: t,
-          walkMin: 0,
-          arriveAt: startAt,
-          waitMin: 0,
+          walkMin: walk,
+          arriveAt: arrive,
+          waitMin: Math.max(0, Math.round((startAt - arrive) / MINUTE)),
           queue: null,
           startAt,
-          endAt: startAt + a.durationMin * MINUTE,
-          latestDepartAt: a.latest,
+          endAt,
+          latestDepartAt: latest,
           rep: 0,
           returnAt: null,
           others: null,
+          meal: { slot: a.slot, mode: a.mode, reservationAt: a.fixedAt, reentryMin, url: place?.url ?? null },
         });
-        t = startAt + a.durationMin * MINUTE;
+        t = endAt;
+        if (place) {
+          pos = place;
+          posKey = place.id;
+        }
         continue;
       }
 
@@ -409,6 +484,7 @@ class Simulator {
         rep: 0,
         returnAt: null,
         others: null,
+        meal: null,
       });
       t = Math.max(t, endAt);
       pos = place;
@@ -516,15 +592,34 @@ function prepare(input: PlanInput): Prepared {
     if (booking.returnEnd < now) dropped.push({ id: ride.id, name: `${ride.name} (Premier Access)` });
     else anchors.push({ type: 'pa', key: `pa:${ride.id}`, ride, booking });
   }
-  if (profile.lunch.enabled && !input.lunchDone) {
-    const earliest = parkWallTime(now, profile.lunch.atMin);
+  for (const slot of ['lunch', 'dinner'] as const) {
+    const pref = profile[slot];
+    const already = slot === 'lunch' ? input.lunchDone : input.dinnerDone;
+    if (!pref.enabled || already) continue;
+    const earliest = parkWallTime(now, pref.atMin);
+    const pick = input.mealPicks?.[slot] ?? null;
+    const fixedAt = pref.mode === 'table' && pick?.reservationAt != null ? pick.reservationAt : null;
     const latest = earliest + LUNCH_SLACK_MIN * MINUTE;
-    if (latest >= now) {
-      anchors.push({ type: 'lunch', key: 'lunch', earliest, latest, durationMin: profile.lunch.durationMin });
-    }
+    if ((fixedAt ?? latest) + RESERVATION_GRACE_MIN * MINUTE < now) continue;
+    const candidates = mealCandidates(input.mealPlaces ?? [], pref.mode);
+    const picked = pick?.placeId ? (candidates.find((c) => c.id === pick.placeId) ?? null) : null;
+    anchors.push({ type: 'meal', key: `meal:${slot}`, slot, mode: pref.mode, earliest, latest, durationMin: pref.durationMin, fixedAt, picked, candidates });
   }
   anchors.sort((a, b) => anchorDeadline(a) - anchorDeadline(b));
   return { candidates, anchors, unplanned, dropped, mustTotal, repBase, reservedKey };
+}
+
+/** Places suited to a meal mode; none for a break taken where the group stands. */
+export function mealCandidates(places: readonly Poi[], mode: MealMode): Poi[] {
+  switch (mode) {
+    case 'free':
+      return [];
+    case 'picnic':
+      return places.filter((p) => p.kind === 'picnic');
+    case 'quick':
+    case 'table':
+      return places.filter((p) => p.kind === 'food' && p.service === mode);
+  }
 }
 
 /** Initial Carte Facilité choice: long waits use the card; local search refines it. */
@@ -705,7 +800,8 @@ function toPlan(input: PlanInput, prep: Prepared, res: SimResult): Plan {
   // Anchors that the best plan still cannot honour are reported, not silently kept.
   if (!res.feasible) {
     for (const s of res.steps) {
-      if ((s.kind === 'show' || s.kind === 'pa') && s.latestDepartAt !== null && s.departAt > s.latestDepartAt) {
+      const timed = s.kind === 'show' || s.kind === 'pa' || (s.kind === 'meal' && s.meal?.reservationAt != null);
+      if (timed && s.latestDepartAt !== null && s.departAt > s.latestDepartAt) {
         dropped.push({ id: s.targetId, name: s.name });
       }
     }

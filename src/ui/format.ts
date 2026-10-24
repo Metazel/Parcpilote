@@ -1,5 +1,5 @@
 import { MINUTE, formatHM } from '../domain/time';
-import type { LiveAttraction, ParkId, PlanStep, QueueKind, StepKind, UnplannedReason } from '../domain/types';
+import type { FoodService, LiveAttraction, MealMode, MealSlot, ParkId, PlanStep, PoiKind, QueueKind, StepKind, UnplannedReason } from '../domain/types';
 
 export const PARK_SHORT: Readonly<Record<ParkId, string>> = { dlp: 'Disneyland Park', daw: 'Adventure World' };
 
@@ -7,7 +7,7 @@ export const STEP_LABEL: Readonly<Record<StepKind, string>> = {
   ride: 'Attraction',
   show: 'Spectacle',
   pa: 'Premier Access',
-  lunch: 'Pause',
+  meal: 'Repas',
   'easy-book': 'Inscription Carte Facilité',
 };
 
@@ -31,8 +31,25 @@ export function repLabel(rep: number): string {
   return rep >= 2 ? `${rep}e fois` : '';
 }
 
-/** Title of a step, with "2e fois" for repeated rides. */
+export const MEAL_SLOT_LABEL: Readonly<Record<MealSlot, string>> = { lunch: 'Déjeuner', dinner: 'Dîner' };
+
+export const MEAL_MODE_LABEL: Readonly<Record<MealMode, string>> = {
+  free: 'Là où vous êtes',
+  picnic: 'Pique-nique',
+  quick: 'Sur le pouce',
+  table: 'À table',
+};
+
+export const SERVICE_LABEL: Readonly<Record<FoodService, string>> = { quick: 'sur le pouce', table: 'à table' };
+
+export const POI_LABEL: Readonly<Record<PoiKind, string>> = { toilets: 'Toilettes', food: 'Restauration', water: "Point d'eau", picnic: 'Aire de pique-nique' };
+
+/** Title of a step, with "2e fois" for repeated rides and the meal for meal stops. */
 export function stepTitle(step: PlanStep): string {
+  if (step.kind === 'meal' && step.meal) {
+    const slot = MEAL_SLOT_LABEL[step.meal.slot];
+    return step.targetId ? `${slot} : ${step.name}` : slot;
+  }
   const rep = repLabel(step.rep);
   return rep ? `${step.name} (${rep})` : step.name;
 }

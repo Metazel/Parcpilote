@@ -1,9 +1,7 @@
-import type { PoiKind } from '../domain/types';
-import type { CompactOsm } from '../domain/walkGraph';
-
-type PoiTuple = [PoiKind, string, number, number];
+import type { FoodService, PoiKind } from '../domain/types';
+import type { CompactOsm, CompactPoi } from '../domain/walkGraph';
 import type { FetchFn } from './themeparks';
-import { arr, int, isRecord, num, str } from './validate';
+import { arr, int, isRecord, num, safeUrl, str } from './validate';
 
 /**
  * OpenStreetMap data for the resort, fetched once from the Overpass API (fixed bounding box:
@@ -14,7 +12,8 @@ import { arr, int, isRecord, num, str } from './validate';
 export const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
 /** South, West, North, East — both parks and the plaza between them. */
 export const RESORT_BBOX = [48.8615, 2.768, 48.8785, 2.786] as const;
-export const OSM_CACHE_KEY = 'parcpilote:osm:v1';
+/** v2: picnic areas, food service type and menu links (older caches are fetched again). */
+export const OSM_CACHE_KEY = 'parcpilote:osm:v2';
 export const OSM_MAX_AGE_MS = 30 * 24 * 3_600_000;
 
 const MAX_ELEMENTS = 150_000;
@@ -32,6 +31,24 @@ const AMENITY: Readonly<Record<string, PoiKind>> = {
   food_court: 'food',
   drinking_water: 'water',
 };
+/** Seated restaurants vs counters, kiosks and food trucks. */
+const SERVICE: Readonly<Record<string, FoodService>> = { restaurant: 'table', fast_food: 'quick', cafe: 'quick', ice_cream: 'quick', food_court: 'quick' };
+const PICNIC = new Set(['picnic_table', 'picnic_site']);
+
+/** POI kind and food service of an OpenStreetMap element, or null. */
+function poiOf(tags: Record<string, unknown>): { kind: PoiKind; service: FoodService | '' } | null {
+  const amenity = str(tags.amenity, 40);
+  const kind = amenity ? AMENITY[amenity] : undefined;
+  if (kind) return { kind, service: (amenity && SERVICE[amenity]) || '' };
+  const leisure = str(tags.leisure, 40);
+  if ((leisure && PICNIC.has(leisure)) || str(tags.tourism, 40) === 'picnic_site') return { kind: 'picnic', service: '' };
+  return null;
+}
+
+/** Menu first, then the place's own website; https only. */
+function linkOf(tags: Record<string, unknown>): string {
+  return safeUrl(tags['website:menu']) ?? safeUrl(tags.menu) ?? safeUrl(tags.website) ?? safeUrl(tags['contact:website']) ?? '';
+}
 
 export function overpassQuery(): string {
   const bbox = RESORT_BBOX.join(',');
@@ -40,6 +57,8 @@ export function overpassQuery(): string {
     '(',
     `way["highway"~"^(${[...WALKABLE].join('|')})$"](${bbox});`,
     `nw["amenity"~"^(${Object.keys(AMENITY).join('|')})$"](${bbox});`,
+    `nw["leisure"~"^(${[...PICNIC].join('|')})$"](${bbox});`,
+    `nw["tourism"="picnic_site"](${bbox});`,
     ');',
     'out geom qt;',
   ].join('');
@@ -73,7 +92,7 @@ export function buildCompactOsm(json: unknown, fetchedAt: number): CompactOsm {
   const names: string[] = [];
   const nameIndex = new Map<string, number>();
   const edgeList: number[] = [];
-  const pois: PoiTuple[] = [];
+  const pois: CompactPoi[] = [];
 
   const nodeIdx = (id: number, la: number, lo: number): number => {
     let i = index.get(id);
@@ -89,13 +108,13 @@ export function buildCompactOsm(json: unknown, fetchedAt: number): CompactOsm {
   for (const el of elements) {
     if (!isRecord(el)) continue;
     const tags = isRecord(el.tags) ? el.tags : {};
-    const amenity = str(tags.amenity, 40);
-    const kind = amenity ? AMENITY[amenity] : undefined;
+    const poi = poiOf(tags);
+    const kind = poi?.kind;
 
-    if (el.type === 'node' && kind) {
+    if (el.type === 'node' && poi) {
       const la = num(el.lat, -90, 90);
       const lo = num(el.lon, -180, 180);
-      if (la !== null && lo !== null && inBbox(la, lo)) pois.push([kind, str(tags.name, MAX_NAME) ?? '', la, lo]);
+      if (la !== null && lo !== null && inBbox(la, lo)) pois.push([poi.kind, str(tags.name, MAX_NAME) ?? '', la, lo, poi.service, linkOf(tags)]);
       continue;
     }
     if (el.type !== 'way') continue;
@@ -116,10 +135,10 @@ export function buildCompactOsm(json: unknown, fetchedAt: number): CompactOsm {
     }
     if (pts.length === 0) continue;
 
-    if (kind) {
+    if (poi && kind) {
       // Amenity mapped as a building outline: use its centroid.
       const c = pts.reduce((a, p) => ({ lat: a.lat + p.lat / pts.length, lon: a.lon + p.lon / pts.length }), { lat: 0, lon: 0 });
-      pois.push([kind, str(tags.name, MAX_NAME) ?? '', c.lat, c.lon]);
+      pois.push([kind, str(tags.name, MAX_NAME) ?? '', c.lat, c.lon, poi.service, linkOf(tags)]);
       if (!walkable(tags)) continue;
     }
     if (!walkable(tags) || pts.length < 2) continue;
@@ -140,7 +159,7 @@ export function buildCompactOsm(json: unknown, fetchedAt: number): CompactOsm {
     }
     if (lat.length > MAX_NODES) throw new Error('Données OpenStreetMap trop volumineuses');
   }
-  return keepMainComponent({ v: 1, fetchedAt, lat, lon, edges: edgeList, names, pois });
+  return keepMainComponent({ v: 2, fetchedAt, lat, lon, edges: edgeList, names, pois });
 }
 
 /** Drops disconnected fragments so that every snapped point can reach every other one. */
@@ -198,7 +217,7 @@ export function keepMainComponent(data: CompactOsm): CompactOsm {
 
 /** Validates a cached compact form (untrusted: it comes back from localStorage). */
 export function parseCompactOsm(v: unknown, now: number): CompactOsm | null {
-  if (!isRecord(v) || v.v !== 1) return null;
+  if (!isRecord(v) || v.v !== 2) return null;
   const fetchedAt = int(v.fetchedAt, Date.UTC(2020, 0, 1), now + 60_000);
   if (fetchedAt === null || now - fetchedAt > OSM_MAX_AGE_MS) return null;
   const lat = arr(v.lat, MAX_NODES);
@@ -217,16 +236,18 @@ export function parseCompactOsm(v: unknown, now: number): CompactOsm | null {
     if (int(edges[e], 0, n - 1) === null || int(edges[e + 1], 0, n - 1) === null || int(edges[e + 2], -1, names.length - 1) === null) return null;
   }
   if (!names.every((s) => typeof s === 'string' && s.length > 0 && s.length <= MAX_NAME)) return null;
-  const cleanPois: PoiTuple[] = [];
+  const cleanPois: CompactPoi[] = [];
   for (const p of pois) {
-    if (!Array.isArray(p) || p.length !== 4) continue;
-    const kind = p[0] === 'toilets' || p[0] === 'food' || p[0] === 'water' ? p[0] : null;
+    if (!Array.isArray(p) || p.length !== 6) continue;
+    const kind = p[0] === 'toilets' || p[0] === 'food' || p[0] === 'water' || p[0] === 'picnic' ? p[0] : null;
     const name = typeof p[1] === 'string' && p[1].length <= MAX_NAME ? p[1] : null;
     const la = num(p[2], -90, 90);
     const lo = num(p[3], -180, 180);
-    if (kind && name !== null && la !== null && lo !== null && inBbox(la, lo)) cleanPois.push([kind, name, la, lo]);
+    const service = p[4] === 'quick' || p[4] === 'table' ? p[4] : p[4] === '' ? '' : null;
+    const url = p[5] === '' ? '' : safeUrl(p[5]);
+    if (kind && name !== null && la !== null && lo !== null && service !== null && url !== null && inBbox(la, lo)) cleanPois.push([kind, name, la, lo, service, url]);
   }
-  return { v: 1, fetchedAt, lat: lat as number[], lon: lon as number[], edges: edges as number[], names: names as string[], pois: cleanPois };
+  return { v: 2, fetchedAt, lat: lat as number[], lon: lon as number[], edges: edges as number[], names: names as string[], pois: cleanPois };
 }
 
 export async function fetchOsm(fetchFn: FetchFn, now: number): Promise<CompactOsm> {

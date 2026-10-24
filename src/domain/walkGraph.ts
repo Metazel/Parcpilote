@@ -1,5 +1,5 @@
 import { haversineM } from './geo';
-import type { GeoPoint, PoiKind } from './types';
+import type { FoodService, GeoPoint, PoiKind } from './types';
 
 /**
  * Pedestrian network built from OpenStreetMap footways: shortest paths (Dijkstra) between
@@ -7,14 +7,17 @@ import type { GeoPoint, PoiKind } from './types';
  */
 
 /** Compact, serialisable network: node coordinates, edge triples [a, b, nameIndex|-1], POIs. */
+/** POI: kind, name, lat, lon, food service ('' when not food), https link ('' when none). */
+export type CompactPoi = readonly [PoiKind, string, number, number, FoodService | '', string];
+
 export interface CompactOsm {
-  readonly v: 1;
+  readonly v: 2;
   readonly fetchedAt: number;
   readonly lat: readonly number[];
   readonly lon: readonly number[];
   readonly edges: readonly number[];
   readonly names: readonly string[];
-  readonly pois: ReadonlyArray<readonly [PoiKind, string, number, number]>;
+  readonly pois: readonly CompactPoi[];
 }
 
 export interface Route {

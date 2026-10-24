@@ -53,6 +53,7 @@
   --poi-food: #c2410c;
   --poi-toilets: #0369a1;
   --poi-water: #0e7490;
+  --poi-picnic: #3f7d20;
   --shadow: 0 1px 2px rgb(27 22 64 / 0.06), 0 8px 24px -12px rgb(27 22 64 / 0.18);
 
   --font-display: 'Bricolage Grotesque', 'Avenir Next', 'Segoe UI', system-ui, sans-serif;
@@ -104,6 +105,7 @@
     --poi-food: #fb923c;
     --poi-toilets: #7dd3fc;
     --poi-water: #67e8f9;
+    --poi-picnic: #9bd67a;
     --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 10px 30px -12px rgb(0 0 0 / 0.6);
     color-scheme: dark;
   }
@@ -137,6 +139,7 @@
   --poi-food: #fb923c;
   --poi-toilets: #7dd3fc;
   --poi-water: #67e8f9;
+  --poi-picnic: #9bd67a;
   --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 10px 30px -12px rgb(0 0 0 / 0.6);
   color-scheme: dark;
 }
@@ -821,7 +824,7 @@ fieldset > legend {
   --band: var(--line-daw);
 }
 
-.ticket.lunch {
+.ticket.meal {
   --band: var(--line-lunch);
 }
 
@@ -1151,7 +1154,7 @@ fieldset > legend {
   border-radius: 4px;
 }
 
-.stop.lunch .stop-dot {
+.stop.meal .stop-dot {
   border-style: dotted;
 }
 
@@ -1252,6 +1255,40 @@ fieldset > legend {
 
 .land.daw {
   --land-line: var(--line-daw);
+}
+
+.land.meal {
+  --land-line: var(--brass);
+}
+
+.meal-item legend {
+  font-family: var(--font-display);
+}
+
+.meal-item .field {
+  margin-bottom: 8px;
+}
+
+.reservation {
+  align-items: flex-end;
+}
+
+.reservation .field {
+  margin-bottom: 0;
+  flex: 1 1 10rem;
+}
+
+.meal-fields + .meal-fields {
+  border-top: 1px solid var(--rule);
+  margin-top: 4px;
+}
+
+.meal-fields .row {
+  align-items: flex-start;
+}
+
+.meal-fields .row .field {
+  flex: 1 1 9rem;
 }
 
 .land .muted {
@@ -1451,6 +1488,16 @@ fieldset > legend {
   fill: var(--poi-water);
 }
 
+.mk-picnic {
+  fill: var(--poi-picnic);
+}
+
+/* Table service: larger, ringed in ink, so it is told apart without colour. */
+.mk-table {
+  stroke: var(--ink);
+  stroke-width: 2.5;
+}
+
 .mk-selected {
   stroke: var(--focus);
   stroke-width: 4;
@@ -1557,6 +1604,10 @@ fieldset > legend {
 
 .layer-water {
   --sw: var(--poi-water);
+}
+
+.layer-picnic {
+  --sw: var(--poi-picnic);
 }
 
 .waits,
@@ -1856,6 +1907,18 @@ dialog::backdrop {
 
   .item:nth-child(odd) {
     border-right: 1px solid var(--rule);
+  }
+
+  .items-single {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .items-single .item {
+    border-right: 0;
+  }
+
+  .items-single .item:not(:last-child) {
+    border-bottom: 1px solid var(--rule);
   }
 
   .map-canvas {

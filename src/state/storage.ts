@@ -2,6 +2,10 @@ import { parkDateKey } from '../domain/time';
 import type {
   EasyAccessReservation,
   GroupProfile,
+  MealMode,
+  MealPick,
+  MealPref,
+  MealSlot,
   LiveAttraction,
   LiveSnapshot,
   PaBooking,
@@ -35,6 +39,9 @@ export interface DayProgress {
   readonly done: readonly string[];
   readonly skipped: readonly string[];
   readonly lunchDone: boolean;
+  readonly dinnerDone: boolean;
+  /** Place and table reservation chosen for each meal today. */
+  readonly meals: Readonly<Partial<Record<MealSlot, MealPick>>>;
   readonly position: (Position & { readonly key: string }) | null;
   readonly shows: readonly ShowPick[];
   readonly paBookings: readonly PaBooking[];
@@ -78,14 +85,15 @@ export const DEFAULT_PROFILE: GroupProfile = {
   paBudgetEur: 0,
   pace: 'normal',
   stroller: false,
-  lunch: { enabled: true, atMin: 12 * 60 + 30, durationMin: 45 },
+  lunch: { enabled: true, atMin: 12 * 60 + 30, durationMin: 45, mode: 'quick' },
+  dinner: { enabled: false, atMin: 19 * 60, durationMin: 60, mode: 'quick' },
   startPark: 'dlp',
   emhAccess: false,
   easyAccess: false,
 };
 
 export function emptyDay(now: number): DayProgress {
-  return { dateKey: parkDateKey(now), done: [], skipped: [], lunchDone: false, position: null, shows: [], paBookings: [], closedReports: {}, forcedDown: {}, easyAccess: null };
+  return { dateKey: parkDateKey(now), done: [], skipped: [], lunchDone: false, dinnerDone: false, meals: {}, position: null, shows: [], paBookings: [], closedReports: {}, forcedDown: {}, easyAccess: null };
 }
 
 export function defaultState(now: number): PersistedState {
@@ -106,6 +114,20 @@ const TIME_MIN = Date.UTC(2020, 0, 1);
 const TIME_MAX = Date.UTC(2100, 0, 1);
 const epoch = (v: unknown) => int(v, TIME_MIN, TIME_MAX);
 
+const MEAL_MODES = ['free', 'picnic', 'quick', 'table'] as const satisfies readonly MealMode[];
+/** Preferred start bounds (minutes after midnight). */
+export const MEAL_WINDOWS: Readonly<Record<MealSlot, readonly [number, number]>> = { lunch: [10 * 60, 16 * 60], dinner: [16 * 60 + 30, 22 * 60 + 30] };
+
+/** A meal preference; `fallbackMode` reads older profiles that had no mode (a break in place). */
+function parseMeal(v: unknown, slot: MealSlot, fallbackMode: MealMode): MealPref | null {
+  if (!isRecord(v)) return null;
+  const enabled = bool(v.enabled);
+  const atMin = int(v.atMin, MEAL_WINDOWS[slot][0], MEAL_WINDOWS[slot][1]);
+  const durationMin = int(v.durationMin, 15, 150);
+  const mode = v.mode === undefined ? fallbackMode : oneOf(v.mode, MEAL_MODES);
+  return enabled === null || atMin === null || durationMin === null || !mode ? null : { enabled, atMin, durationMin, mode };
+}
+
 export function parseProfile(v: unknown): GroupProfile | null {
   if (!isRecord(v) || !isRecord(v.lunch)) return null;
   const size = int(v.size, 1, 20);
@@ -114,9 +136,9 @@ export function parseProfile(v: unknown): GroupProfile | null {
   const paBudgetEur = num(v.paBudgetEur, 0, 1000);
   const pace = oneOf(v.pace, ['slow', 'normal', 'fast'] as const satisfies readonly Pace[]);
   const stroller = bool(v.stroller);
-  const lunchEnabled = bool(v.lunch.enabled);
-  const atMin = int(v.lunch.atMin, 10 * 60, 16 * 60);
-  const durationMin = int(v.lunch.durationMin, 15, 120);
+  // Profiles before v0.5 had a lunch break without mode, and no dinner.
+  const lunch = parseMeal(v.lunch, 'lunch', 'free');
+  const dinner = v.dinner === undefined ? DEFAULT_PROFILE.dinner : parseMeal(v.dinner, 'dinner', 'quick');
   const startPark = oneOf(v.startPark, PARKS);
   // Absent in profiles saved by v0.1: defaults to no access.
   const emhAccess = v.emhAccess === undefined ? false : bool(v.emhAccess);
@@ -124,8 +146,8 @@ export function parseProfile(v: unknown): GroupProfile | null {
   const easyAccess = v.easyAccess === undefined ? false : bool(v.easyAccess);
   if (emhAccess === null || easyAccess === null) return null;
   if (size === null || (v.smallestHeightCm !== null && smallest === null) || singleRiderOk === null || paBudgetEur === null) return null;
-  if (!pace || stroller === null || lunchEnabled === null || atMin === null || durationMin === null || !startPark) return null;
-  return { size, smallestHeightCm: smallest, singleRiderOk, paBudgetEur, pace, stroller, lunch: { enabled: lunchEnabled, atMin, durationMin }, startPark, emhAccess, easyAccess };
+  if (!pace || stroller === null || !lunch || !dinner || !startPark) return null;
+  return { size, smallestHeightCm: smallest, singleRiderOk, paBudgetEur, pace, stroller, lunch, dinner, startPark, emhAccess, easyAccess };
 }
 
 function parseIdList(v: unknown, max = 300): string[] {
@@ -154,6 +176,19 @@ function parseRepeats(v: unknown): Record<string, number> {
     const id = safeId(k);
     const n = int(val, 2, MAX_REPEATS);
     if (id && n !== null) out[id] = n;
+  }
+  return out;
+}
+
+function parseMealPicks(v: unknown): Partial<Record<MealSlot, MealPick>> {
+  const out: Partial<Record<MealSlot, MealPick>> = {};
+  if (!isRecord(v)) return out;
+  for (const slot of ['lunch', 'dinner'] as const) {
+    const m = v[slot];
+    if (!isRecord(m)) continue;
+    const placeId = m.placeId === null ? null : safeId(m.placeId);
+    const reservationAt = m.reservationAt === null ? null : epoch(m.reservationAt);
+    if ((m.placeId === null || placeId) && (m.reservationAt === null || reservationAt !== null)) out[slot] = { placeId, reservationAt };
   }
   return out;
 }
@@ -211,6 +246,8 @@ function parseDay(v: unknown, now: number): DayProgress {
     done: parseIdSequence(v.done),
     skipped: parseIdList(v.skipped),
     lunchDone: bool(v.lunchDone) ?? false,
+    dinnerDone: bool(v.dinnerDone) ?? false,
+    meals: parseMealPicks(v.meals),
     position: parsePosition(v.position),
     shows,
     paBookings,

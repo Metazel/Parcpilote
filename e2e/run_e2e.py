@@ -94,6 +94,9 @@ def overpass_grid() -> dict:
         {"type": "node", "id": 2, "lat": 48.8668, "lon": 2.778, "tags": {"amenity": "toilets", "name": "Toilettes Worlds of Pixar"}},
         {"type": "node", "id": 3, "lat": 48.8745, "lon": 2.7755, "tags": {"amenity": "fast_food", "name": "<img src=x onerror=alert(1)>"}},
         {"type": "node", "id": 4, "lat": 48.8712, "lon": 2.7738, "tags": {"amenity": "drinking_water"}},
+        {"type": "node", "id": 5, "lat": 48.8716, "lon": 2.7745, "tags": {"amenity": "restaurant", "name": "Le Bistrot des Tests", "website:menu": "https://example.org/carte"}},
+        {"type": "node", "id": 6, "lat": 48.8742, "lon": 2.7768, "tags": {"amenity": "fast_food", "name": "Tacos du Fort"}},
+        {"type": "node", "id": 7, "lat": 48.8696, "lon": 2.7805, "tags": {"leisure": "picnic_site", "name": "Aire de pique-nique"}},
     ]
     return {"elements": elements}
 
@@ -205,7 +208,7 @@ def run(browser: Browser) -> None:
 
     @scenario("Étape terminée : position et plan mis à jour")
     def s4():
-        page.get_by_role("button", name=re.compile("Attraction faite|Spectacle vu|Pause terminée")).click()
+        page.get_by_role("button", name=re.compile("Attraction faite|Spectacle vu|Repas terminé")).click()
         expect(page.locator("#next-title")).not_to_have_text(state["first"])
         expect(page.locator(".summary div", has_text="Faits aujourd'hui").locator("dd")).to_have_text("1")
 
@@ -789,6 +792,65 @@ def run_rgaa(browser: Browser) -> None:
         ctx.close()
 
 
+def run_meals(browser: Browser) -> None:
+    """Meals: on the go, at a table with a reservation, or a picnic outside the gates."""
+    ctx, page, errors = new_page(browser)
+
+    @scenario("Repas : déjeuner à table et dîner pique-nique réglés dans Groupe")
+    def m1():
+        onboard(page)
+        for ride in ["Peter Pan's Flight", "Dumbo the Flying Elephant", "Big Thunder Mountain"]:
+            set_priority(page, ride, "Incontournable")
+        tab(page, "Groupe")
+        page.get_by_role("group", name="Déjeuner : comment ?").get_by_role("radio", name="À table").check()
+        expect(page.locator("#lunch-duration")).to_have_value("75")
+        page.get_by_label("Prévoir le dîner").check()
+        page.get_by_role("group", name="Dîner : comment ?").get_by_role("radio", name="Pique-nique").check()
+        page.get_by_role("button", name="Enregistrer").click()
+        expect(page.get_by_role("status").filter(has_text="Enregistré")).to_be_visible()
+
+    @scenario("Repas : restaurant et réservation choisis dans Ma liste, plan calé dessus")
+    def m2():
+        tab(page, "Ma liste")
+        meals = page.get_by_role("region", name="Repas")
+        expect(meals).to_be_visible()
+        meals.get_by_label("Où déjeuner").select_option(label="Le Bistrot des Tests (Disneyland Park)")
+        meals.get_by_label("Réservation du déjeuner").fill("13:00")
+        meals.get_by_role("button", name="Enregistrer").click()
+        expect(meals.get_by_role("status").first).to_contain_text("Réservation à 13:00 enregistrée")
+        expect(meals.get_by_role("link", name=re.compile("Menu de Le Bistrot des Tests"))).to_have_attribute("href", "https://example.org/carte")
+        tab(page, "Plan")
+        stop = page.locator(".stop.meal", has_text="Déjeuner : Le Bistrot des Tests")
+        expect(stop).to_contain_text("réservation 13:00")
+        dinner = page.locator(".stop.meal", has_text="Dîner")
+        expect(dinner).to_contain_text("sortie et retour au contrôle compris")
+        shot(page, "repas-plan")
+
+    @scenario("Repas : billet du déjeuner, menu et carte des pique-niques")
+    def m3():
+        tab(page, "Groupe")
+        page.get_by_label("Aller à l'heure").fill("12:40")
+        page.get_by_role("button", name="Aller à cette heure").click()
+        tab(page, "Maintenant")
+        expect(page.locator(".sign-kind")).to_contain_text("déjeuner, à table")
+        expect(page.locator("#next-title")).to_have_text("Le Bistrot des Tests")
+        expect(page.locator(".facts")).to_contain_text("13:00")
+        expect(page.locator(".sign").get_by_role("link", name=re.compile("Voir le menu"))).to_have_attribute("href", "https://example.org/carte")
+        shot(page, "repas-billet")
+        tab(page, "Carte")
+        expect(page.locator(".layers").get_by_label("Pique-nique")).to_be_checked()
+        page.get_by_role("radiogroup", name="Type de lieu à proximité").get_by_role("radio", name="Pique-nique").check()
+        expect(page.locator("ul.nearby")).to_contain_text("hors des parcs")
+        page.get_by_role("radiogroup", name="Type de lieu à proximité").get_by_role("radio", name="Restauration").check()
+        expect(page.locator("ul.nearby")).to_contain_text("à table")
+
+    for fn in (m1, m2, m3):
+        fn()
+    console_errors = [e for e in errors if "Failed to load resource" not in e]
+    results.append(("Aucune erreur JavaScript (repas)", not console_errors, "; ".join(console_errors)[:300] or "ok"))
+    ctx.close()
+
+
 def run_single(browser: Browser) -> None:
     ctx = browser.new_context(**PHONE)
     page = ctx.new_page()
@@ -865,7 +927,7 @@ def main() -> int:
         with sync_playwright() as p:
             # --disable-dev-shm-usage: CI containers often have a tiny /dev/shm.
             browser = p.chromium.launch(args=["--disable-dev-shm-usage"])
-            for suite in (run, run_security, run_live, run_map, run_a11y, run_easy, run_rgaa, run_single):
+            for suite in (run, run_security, run_live, run_map, run_a11y, run_easy, run_meals, run_rgaa, run_single):
                 flaky += run_suite(suite, browser)
             browser.close()
     finally:

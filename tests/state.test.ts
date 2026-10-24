@@ -357,3 +357,33 @@ describe('off-thread planner', () => {
     s.stop();
   });
 });
+
+describe('meals in the store', () => {
+  it('validates the chosen place, completes and skips meals', async () => {
+    const storage = new MemoryStorage();
+    const s = new AppStore({ storage, fetchFn: null, realNow: () => at(10) });
+    await s.refresh();
+    await s.loadOsm();
+    s.saveProfile({
+      ...DEFAULT_PROFILE,
+      lunch: { enabled: true, atMin: 12 * 60 + 30, durationMin: 40, mode: 'picnic' },
+      dinner: { enabled: true, atMin: 19 * 60, durationMin: 30, mode: 'quick' },
+    });
+    s.setWish('dlp-peter-pan', 'must');
+    const lunch = () => s.getState().plan!.steps.find((x) => x.kind === 'meal' && x.meal?.slot === 'lunch');
+    // Without network, the resort's own picnic area is offered (outside the gates).
+    expect(lunch()?.targetId).toBe('resort-picnic');
+    expect(lunch()?.meal?.reentryMin).toBe(15);
+    expect(s.setMealPick('lunch', 'not-a-place', null)).toBe(false);
+    expect(s.setMealPick('lunch', 'resort-picnic', at(10) + 30 * 60 * MINUTE)).toBe(false);
+    expect(s.setMealPick('lunch', 'resort-picnic', null)).toBe(true);
+    s.completeStep(lunch()!);
+    expect(s.getState().persisted.day.lunchDone).toBe(true);
+    expect(s.getState().persisted.day.position?.key).toBe('resort-picnic');
+    const dinner = s.getState().plan!.steps.find((x) => x.kind === 'meal' && x.meal?.slot === 'dinner')!;
+    s.skipStep(dinner);
+    expect(s.getState().persisted.day.dinnerDone).toBe(true);
+    expect(s.getState().plan!.steps.some((x) => x.kind === 'meal')).toBe(false);
+    s.stop();
+  });
+});

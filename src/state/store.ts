@@ -8,7 +8,8 @@ import { type Route, WalkGraph } from '../domain/walkGraph';
 import { MAX_REPEATS, type PlanInput, computePlan, wantedRides } from '../domain/planner';
 import { type PaAdvice, advisePremierAccess, remainingBudgetCents } from '../domain/premierAccess';
 import { MINUTE, formatHM, parkDateKey, parkMinutesOfDay, parkWallTime } from '../domain/time';
-import type { GeoPoint, GroupProfile, LiveSnapshot, ParkId, Place, Plan, PlanStep, Poi, Position, Priority } from '../domain/types';
+import type { GeoPoint, GroupProfile, LiveSnapshot, MealSlot, ParkId, Place, Plan, PlanStep, Poi, Position, Priority } from '../domain/types';
+import { DLP_DINING } from '../data/resort';
 import { updateCorrection } from '../domain/waits';
 import type { PlannerClient } from './planner';
 import {
@@ -369,6 +370,10 @@ export class AppStore {
       done,
       doneCounts,
       lunchDone: day.lunchDone,
+      dinnerDone: day.dinnerDone,
+      mealPlaces: this.state.pois.filter((p) => p.kind === 'food' || p.kind === 'picnic'),
+      mealPicks: day.meals,
+      reentryMin: DLP_DINING.reentryMin,
       corrections: persisted.corrections,
       easyAccessReservation: profile.easyAccess ? day.easyAccess : null,
       previousNextId: prevFirst?.kind === 'ride' ? prevFirst.targetId : undefined,
@@ -524,8 +529,12 @@ export class AppStore {
       if (step.returnAt !== null) this.registerEasyAccess(step.targetId, step.returnAt);
       return;
     }
-    if (step.kind === 'lunch') {
-      this.patchDay({ lunchDone: true });
+    if (step.kind === 'meal') {
+      const slot = step.meal?.slot ?? 'lunch';
+      this.patchDay({
+        ...(slot === 'lunch' ? { lunchDone: true } : { dinnerDone: true }),
+        ...(step.targetId ? { position: { lat: step.position.lat, lon: step.position.lon, park: step.position.park, key: step.targetId } } : {}),
+      });
     } else {
       // Rides may be done several times a day; shows and Premier Access count once.
       const repeatable = step.kind === 'ride';
@@ -562,14 +571,36 @@ export class AppStore {
 
   skip(targetId: string): void {
     const { day } = this.state.persisted;
-    if (targetId === '') this.patchDay({ lunchDone: true });
-    else if (!day.skipped.includes(targetId)) this.patchDay({ skipped: [...day.skipped, targetId] });
+    if (targetId === '') return;
+    if (!day.skipped.includes(targetId)) this.patchDay({ skipped: [...day.skipped, targetId] });
     if (targetId !== '' && day.easyAccess?.rideId === targetId) this.patchDay({ easyAccess: null });
     if (this.state.persisted.day.shows.some((s) => s.showId === targetId)) {
       this.patchDay({ shows: this.state.persisted.day.shows.filter((s) => s.showId !== targetId) });
     }
     this.set({ forcedNextId: null, plan: this.planWithout((s) => s.targetId === targetId) });
     this.recompute();
+  }
+
+  /** "Passer" on any step: rides and shows are dropped for the day, a meal is marked as taken. */
+  skipStep(step: PlanStep): void {
+    if (step.kind !== 'meal') {
+      this.skip(step.targetId);
+      return;
+    }
+    this.patchDay(step.meal?.slot === 'dinner' ? { dinnerDone: true } : { lunchDone: true });
+    this.set({ forcedNextId: null, plan: this.planWithout((s) => s === step) });
+    this.recompute();
+  }
+
+  /** Where to eat for a meal (null: the most convenient on the route) and the table reservation. */
+  setMealPick(slot: MealSlot, placeId: string | null, reservationAt: number | null): boolean {
+    if (placeId !== null && !this.state.pois.some((p) => p.id === placeId && (p.kind === 'food' || p.kind === 'picnic'))) return false;
+    const now = this.state.now;
+    if (reservationAt !== null && (!Number.isFinite(reservationAt) || reservationAt < now - 60 * MINUTE || reservationAt > now + 16 * 60 * MINUTE)) return false;
+    const meals = { ...this.state.persisted.day.meals, [slot]: { placeId, reservationAt } };
+    this.patchDay({ meals });
+    this.recompute();
+    return true;
   }
 
   restore(targetId: string): void {

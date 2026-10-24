@@ -2,7 +2,7 @@ import { formatHM } from '../../domain/time';
 import { PARK_NAMES } from '../../domain/types';
 import { useAppState, useStore } from '../context';
 import type { Tab } from '../context';
-import { QUEUE_LABEL, REASON_LABEL, STEP_LABEL, minutes, stepTitle } from '../format';
+import { MEAL_MODE_LABEL, QUEUE_LABEL, REASON_LABEL, STEP_LABEL, minutes, stepTitle } from '../format';
 
 export function PlanScreen({ go }: { go: (tab: Tab) => void }) {
   const store = useStore();
@@ -84,8 +84,8 @@ export function PlanScreen({ go }: { go: (tab: Tab) => void }) {
                   <span class="visually-hidden">, {STEP_LABEL[s.kind]}</span>
                 </p>
                 <p class="stop-meta">
-                  {s.kind === 'lunch'
-                    ? `Jusqu'à ${formatHM(s.endAt)}`
+                  {s.kind === 'meal' && s.meal
+                    ? `${MEAL_MODE_LABEL[s.meal.mode]}${s.meal.reservationAt !== null ? `, réservation ${formatHM(s.meal.reservationAt)}` : `, de ${formatHM(s.startAt)}`} à ${formatHM(s.endAt)}${s.meal.reentryMin > 0 ? `, sortie et retour au contrôle compris` : ''}`
                     : s.kind === 'easy-book'
                       ? `Retour prévu vers ${formatHM(s.returnAt ?? s.endAt)} ; en attendant, les étapes suivantes`
                       : s.kind === 'show'
