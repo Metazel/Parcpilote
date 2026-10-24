@@ -5,11 +5,12 @@ import { demoSnapshot } from '../data/demo';
 import { type FetchFn, LiveDataError, loadLive } from '../data/themeparks';
 import { DETOUR_FACTOR, type NetworkFn, PARK_ENTRANCES, haversineM, walkMinutes } from '../domain/geo';
 import { type Route, WalkGraph } from '../domain/walkGraph';
-import { MAX_REPEATS, computePlan, wantedRides } from '../domain/planner';
+import { MAX_REPEATS, type PlanInput, computePlan, wantedRides } from '../domain/planner';
 import { type PaAdvice, advisePremierAccess, remainingBudgetCents } from '../domain/premierAccess';
 import { MINUTE, formatHM, parkDateKey, parkMinutesOfDay, parkWallTime } from '../domain/time';
 import type { GeoPoint, GroupProfile, LiveSnapshot, ParkId, Place, Plan, PlanStep, Poi, Position, Priority } from '../domain/types';
 import { updateCorrection } from '../domain/waits';
+import type { PlannerClient } from './planner';
 import {
   type DayProgress,
   type PersistedState,
@@ -41,6 +42,8 @@ export interface AppState {
   readonly now: number;
   readonly data: DataStatus;
   readonly plan: Plan | null;
+  /** A newer plan is being computed (off-thread); the current one may be slightly stale. */
+  readonly planPending: boolean;
   readonly advice: PaAdvice | null;
   readonly alerts: readonly Alert[];
   readonly forcedNextId: string | null;
@@ -61,6 +64,8 @@ export interface StoreDeps {
   readonly storage: StorageLike;
   readonly fetchFn: FetchFn | null;
   readonly realNow: () => number;
+  /** Off-thread planner; plans are computed synchronously without one. */
+  readonly planner?: PlannerClient | null;
 }
 
 const TICK_MS = 5_000;
@@ -84,6 +89,8 @@ export class AppStore {
   private readonly firedAlerts = new Set<string>();
   private officialRestaurants: ReadonlyArray<{ park: ParkId; id: string; name: string; lat: number; lon: number }> = [];
   private osmData: ReturnType<typeof parseCompactOsm> = null;
+  /** Sequence number of the latest plan request: older answers are ignored. */
+  private planSeq = 0;
 
   constructor(private readonly deps: StoreDeps) {
     const real = deps.realNow();
@@ -95,6 +102,7 @@ export class AppStore {
       now: real,
       data: { mode: persisted.settings.source === 'demo' ? 'demo' : 'live', state: 'loading', message: null, fetchedAt: null },
       plan: null,
+      planPending: false,
       advice: null,
       alerts: [],
       forcedNextId: null,
@@ -280,6 +288,7 @@ export class AppStore {
       }
     }
     this.osmData = data;
+    this.deps.planner?.setNetwork(data);
     if (!data) {
       this.set({ osm: { status: 'unavailable', fetchedAt: null }, graph: null });
       this.rebuildPois();
@@ -329,7 +338,8 @@ export class AppStore {
     const snapshot = this.effectiveSnapshot();
     const profile = persisted.profile;
     if (!snapshot || !profile) {
-      this.set({ plan: null, advice: null });
+      this.planSeq++;
+      this.set({ plan: null, planPending: false, advice: null });
       return;
     }
     const { day } = persisted;
@@ -345,7 +355,7 @@ export class AppStore {
     const pos = this.currentPosition();
     const prevFirst = this.state.plan?.steps.find((s) => s.kind !== 'easy-book');
     const forcedNextId = this.state.forcedNextId && !done.has(this.state.forcedNextId) ? this.state.forcedNextId : undefined;
-    const plan = computePlan({
+    const input: PlanInput = {
       now,
       position: pos,
       positionKey: pos.key,
@@ -363,8 +373,28 @@ export class AppStore {
       easyAccessReservation: profile.easyAccess ? day.easyAccess : null,
       previousNextId: prevFirst?.kind === 'ride' ? prevFirst.targetId : undefined,
       forcedNextId,
-      network: this.network(),
-    });
+    };
+    this.lastPlanAt = now;
+    const seq = ++this.planSeq;
+    const planner = this.deps.planner;
+    if (!planner) {
+      this.applyPlan(seq, input, computePlan({ ...input, network: this.network() }));
+      return;
+    }
+    this.set({ planPending: true });
+    planner.plan(input).then(
+      (plan) => this.applyPlan(seq, input, plan),
+      // Worker failure: compute here rather than leave the user without a plan.
+      () => this.applyPlan(seq, input, computePlan({ ...input, network: this.network() })),
+    );
+  }
+
+  /** Installs a computed plan unless a newer request was made meanwhile. */
+  private applyPlan(seq: number, input: PlanInput, plan: Plan): void {
+    if (seq !== this.planSeq) return;
+    const { now, catalog, snapshot, profile, wishes, done, forcedNextId } = input;
+    const { persisted } = this.state;
+    const day = persisted.day;
     const advice = advisePremierAccess({
       now,
       catalog,
@@ -377,9 +407,14 @@ export class AppStore {
       corrections: persisted.corrections,
       plan,
     });
-    this.lastPlanAt = now;
-    this.set({ plan, advice, forcedNextId: forcedNextId ?? null });
+    this.set({ plan, planPending: false, advice, forcedNextId: forcedNextId ?? null });
     this.planAlerts(plan);
+  }
+
+  /** Current plan without some steps, shown while the new plan is computed. */
+  private planWithout(drop: (s: PlanStep, i: number) => boolean): Plan | null {
+    const plan = this.state.plan;
+    return plan ? { ...plan, steps: plan.steps.filter((s, i) => !drop(s, i)) } : null;
   }
 
   // ---- alerts -------------------------------------------------------------
@@ -501,7 +536,7 @@ export class AppStore {
         paBookings: step.kind === 'pa' ? day.paBookings.map((b) => (b.attractionId === step.targetId ? { ...b, used: true } : b)) : day.paBookings,
       });
     }
-    this.set({ forcedNextId: null, plan: null });
+    this.set({ forcedNextId: null, plan: this.planWithout((s) => s === step) });
     this.recompute();
   }
 
@@ -515,7 +550,7 @@ export class AppStore {
       easyAccess: { rideId, returnAt },
       position: { lat: place.lat, lon: place.lon, park: place.park, key: rideId },
     });
-    this.set({ forcedNextId: null, plan: null });
+    this.set({ forcedNextId: null, plan: this.planWithout((s) => s.kind === 'easy-book' && s.targetId === rideId) });
     this.recompute();
     return true;
   }
@@ -533,7 +568,7 @@ export class AppStore {
     if (this.state.persisted.day.shows.some((s) => s.showId === targetId)) {
       this.patchDay({ shows: this.state.persisted.day.shows.filter((s) => s.showId !== targetId) });
     }
-    this.set({ forcedNextId: null, plan: null });
+    this.set({ forcedNextId: null, plan: this.planWithout((s) => s.targetId === targetId) });
     this.recompute();
   }
 
@@ -622,7 +657,7 @@ export class AppStore {
   resetDay(): void {
     this.firedAlerts.clear();
     this.persist({ day: emptyDay(this.state.now) });
-    this.set({ alerts: [], forcedNextId: null, plan: null });
+    this.set({ alerts: [], forcedNextId: null, plan: null, planPending: false });
     this.recompute();
   }
 

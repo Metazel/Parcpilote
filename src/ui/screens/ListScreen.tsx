@@ -30,7 +30,7 @@ function RideItem({ ride }: { ride: Attraction }) {
     <fieldset class="item">
       <legend>{ride.name}</legend>
       <div class="item-meta">
-        <span class={`wait-${band}`}>{liveLabel(live)}</span>
+        <span class={`wait-pill wait-${band}`}>{liveLabel(live)}</span>
         {ride.minHeightCm > 0 && <span class="tag">{ride.minHeightCm} cm min.</span>}
         {ride.singleRider && <span class="tag">Single Rider</span>}
         {ride.premierAccess && <span class="tag">Premier Access</span>}
@@ -38,7 +38,7 @@ function RideItem({ ride }: { ride: Attraction }) {
       </div>
       {allowed ? (
         <>
-        <div class="segmented" role="radiogroup" aria-label={`Priorité pour ${ride.name}`}>
+        <div class="segmented joined" role="radiogroup" aria-label={`Priorité pour ${ride.name}`}>
           {PRIORITY_OPTIONS.map((o) => (
             <label key={o.value}>
               <input
@@ -143,7 +143,7 @@ export function ListScreen() {
           : `${persisted.wishes.length} attractions choisies, dont ${mustCount} incontournables.`}
       </p>
       <div class="filters">
-        <div class="segmented" role="radiogroup" aria-label="Parc">
+        <div class="segmented joined" role="radiogroup" aria-label="Parc">
           {(['all', 'dlp', 'daw'] as const).map((p) => (
             <label key={p}>
               <input type="radio" name="park-filter" checked={park === p} onChange={() => setPark(p)} />
@@ -159,16 +159,18 @@ export function ListScreen() {
 
       {groups.length === 0 && <p class="muted">Aucun résultat pour cette recherche.</p>}
       {groups.map(([key, g]) => (
-        <section key={key} aria-label={key.split('|')[1]}>
-          <h2 class={`land ${g.park}`}>
+        <section key={key} class="land-group" aria-labelledby={`land-${key.replace(/[^a-z0-9]/gi, '-')}`}>
+          <h2 class={`land ${g.park}`} id={`land-${key.replace(/[^a-z0-9]/gi, '-')}`}>
             {key.split('|')[1]} <span class="muted">({PARK_SHORT[g.park]})</span>
           </h2>
-          {g.rides.map((r) => (
-            <RideItem key={r.id} ride={r} />
-          ))}
-          {g.shows.map((s) => (
-            <ShowItem key={s.id} show={s} />
-          ))}
+          <div class="items">
+            {g.rides.map((r) => (
+              <RideItem key={r.id} ride={r} />
+            ))}
+            {g.shows.map((s) => (
+              <ShowItem key={s.id} show={s} />
+            ))}
+          </div>
         </section>
       ))}
     </div>

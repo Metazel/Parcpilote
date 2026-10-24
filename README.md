@@ -1,6 +1,6 @@
 # ParcPilote
 
-Assistant de visite pour Disneyland Paris : à tout moment, la meilleure prochaine étape pour le groupe, en tenant compte des temps d'attente en direct, de la marche, des spectacles choisis, du Single Rider, du Premier Access et de la Carte Facilité. Version 0.3.0.
+Assistant de visite pour Disneyland Paris : à tout moment, la meilleure prochaine étape pour le groupe, en tenant compte des temps d'attente en direct, de la marche, des spectacles choisis, du Single Rider, du Premier Access et de la Carte Facilité. Version 0.4.0.
 
 ## Ce que fait l'application
 
@@ -16,6 +16,14 @@ Assistant de visite pour Disneyland Paris : à tout moment, la meilleure prochai
 - **Alertes** dans l'application : panne, réouverture, attente qui chute, départ pour un spectacle, données trop anciennes.
 - **Premier Access** : conseil chiffré (minutes gagnées, prix), puis saisie du créneau acheté qui devient une étape du plan.
 - **Mode démo** déterministe : journée simulée, horloge accélérée, pannes déclenchables. Il sert aussi à préparer sa visite la veille.
+
+## Habillage et accessibilité
+
+- **Le billet** : la prochaine étape se présente comme un billet d'attraction (bandeau à la couleur du parc, perforation, chiffres en grand). Le reste de l'interface reste sobre ; les couleurs des parcs ne servent qu'à structurer (bandeau, tracé du plan, repères de zone).
+- **Typographies auto-hébergées** (licence OFL, aucune requête vers un tiers) : Bricolage Grotesque pour les titres et les chiffres, Atkinson Hyperlegible Next pour le texte, dessinée pour les personnes malvoyantes.
+- **Adaptatif** : barre d'onglets en bas sur téléphone, navigation latérale et mises en page sur deux colonnes à partir de 1000 px ; thèmes clair et sombre ; mode contraste élevé de Windows.
+- **RGAA 4.1** : liens d'évitement, titre de page par vue, hiérarchie de titres, focus visible, erreurs de saisie liées au champ avec focus, liens « nouvelle fenêtre » annoncés, texte à 200 % et espacement du texte augmenté sans perte, aucun défilement horizontal à 320 px, cibles tactiles de 44 px, animations coupées si l'appareil le demande. Contrastes vérifiés par calcul (texte ≥ 7:1, texte secondaire ≥ 4,5:1, commandes ≥ 3:1). Vérifié automatiquement à chaque version (axe-core WCAG 2.2 AA en clair et sombre, sur téléphone et grand écran, et 10 scénarios RGAA dédiés) ; conformité non auditée par un tiers.
+- **Performance** : le plan est calculé dans un worker, l'interface ne se bloque jamais (pire interaction mesurée à 120 ms sur téléphone simulé, contre 400 ms auparavant, aucune tâche longue) ; rendu différé des zones hors écran dans Ma liste ; carte chargée à la demande.
 
 ## Démarrer
 
@@ -34,8 +42,9 @@ npm run test:e2e       # recette navigateur : pip install -r e2e/requirements.tx
 src/
   domain/   modèle, temps (Europe/Paris), marche, prévision d'attente, planificateur, conseil Premier Access
   data/     référentiel indicatif, adaptateur ThemeParks.wiki validé, simulation démo
-  state/    persistance validée (localStorage) et store applicatif
-  ui/       écrans Preact, styles
+  state/    persistance validée (localStorage), store applicatif, client du worker de planification
+  workers/  calcul du plan hors du fil principal
+  ui/       écrans Preact, styles, polices auto-hébergées
 tests/      tests unitaires (Vitest)
 e2e/        recette navigateur (Playwright)
 ```
@@ -68,9 +77,9 @@ Le workflow `.github/workflows/ci.yml` vérifie, construit, teste puis publie l'
 
 | Job | Contenu |
 | --- | --- |
-| `verify` | types, lint, 93 tests unitaires, `npm audit` |
+| `verify` | types, lint, 94 tests unitaires, `npm audit` |
 | `build` | PWA (`dist/`) et fichier unique (`dist-single/`) ; artefact Pages sur `main` |
-| `e2e` | 30 scénarios Playwright, captures en artefact ; une suite en échec est rejouée une fois, les instabilités sont signalées en annotation |
+| `e2e` | 43 scénarios Playwright (dont accessibilité RGAA), captures en artefact ; une suite en échec est rejouée une fois, les instabilités sont signalées en annotation |
 | `deploy` | publication GitHub Pages (push ou lancement manuel sur `main`) |
 
 Les pull requests passent les trois premiers jobs sans publier. Un passage hebdomadaire rejoue l'audit. Les actions sont épinglées par empreinte SHA, les permissions limitées par job ; le workflow est contrôlé par `actionlint` et `zizmor`. Dependabot (`.github/dependabot.yml`) propose chaque semaine les mises à jour npm, pip et GitHub Actions, avec un délai de 14 jours.

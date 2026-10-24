@@ -207,7 +207,7 @@ def run(browser: Browser) -> None:
     def s4():
         page.get_by_role("button", name=re.compile("Attraction faite|Spectacle vu|Pause terminée")).click()
         expect(page.locator("#next-title")).not_to_have_text(state["first"])
-        expect(page.locator(".summary")).to_contain_text("Faits aujourd'hui : 1")
+        expect(page.locator(".summary div", has_text="Faits aujourd'hui").locator("dd")).to_have_text("1")
 
     @scenario("US5 Plan : arrivée au spectacle avant l'heure, marge comprise")
     def s5():
@@ -265,7 +265,7 @@ def run(browser: Browser) -> None:
         tab(page, "Maintenant")
         panel = page.locator("section.panel", has_text="Premier Access conseillé")
         expect(panel).to_be_visible()
-        name = panel.locator("h3").inner_text().replace("Premier Access conseillé : ", "")
+        name = panel.locator("h2").inner_text().replace("Premier Access conseillé : ", "")
         assert re.search(r"\d+ min gagnées", panel.inner_text())
         shot(page, "06-premier-access")
         panel.get_by_role("button", name="J'ai acheté").click()
@@ -502,9 +502,9 @@ def run_a11y(browser: Browser) -> None:
                 if scheme == "dark":
                     shot(page, f"dark-{name.replace(' ', '-').lower()}")
                 page.add_script_tag(content=axe)
-                res = page.evaluate("axe.run(document, { runOnly: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'] })")
+                res = page.evaluate("axe.run(document, { runOnly: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] })")
                 for v in res["violations"]:
-                    if v["impact"] in ("serious", "critical"):
+                    if v["impact"] in ("serious", "critical", "moderate"):
                         problems.append(f"{name}: {v['id']} ({len(v['nodes'])}) {v['nodes'][0]['target']}")
             assert not problems, " | ".join(problems)
 
@@ -599,6 +599,196 @@ def run_easy(browser: Browser) -> None:
     ctx.close()
 
 
+RGAA_TABS = ("Maintenant", "Plan", "Ma liste", "Carte", "Groupe")
+
+# Elements a visitor can act on, with their size and whether they sit inside running text (exempt).
+TARGETS_JS = """() => [...document.querySelectorAll('button, a[href], input, select, summary, [role=radio]')]
+  .filter((el) => el.offsetParent !== null && !el.closest('.leaflet-container') && !el.closest('.skip-links'))
+  .map((el) => {
+    const t = el.closest('label') || (el.type === 'radio' || el.type === 'checkbox' ? el.parentElement : el);
+    const r = t.getBoundingClientRect();
+    const inline = el.tagName === 'A' && getComputedStyle(el).display === 'inline' && el.closest('p');
+    return { name: (el.textContent || el.getAttribute('aria-label') || el.name || el.id || el.tagName).trim().slice(0, 40), w: Math.round(r.width), h: Math.round(r.height), inline: !!inline };
+  })"""
+
+HEADINGS_JS = """() => [...document.querySelectorAll('main h1, main h2, main h3, main h4')].filter((h) => h.offsetParent !== null).map((h) => Number(h.tagName[1]))"""
+
+
+def overflow_x(page: Page) -> int:
+    return page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
+
+
+def setup_group(page: Page) -> None:
+    onboard(page)
+    for ride in ["Peter Pan's Flight", "Big Thunder Mountain", "Buzz Lightyear Laser Blast"]:
+        set_priority(page, ride, "Incontournable")
+
+
+def run_rgaa(browser: Browser) -> None:
+    """RGAA 4.1 checks beyond axe-core: reflow, text resize and spacing, skip link, titles, focus, targets, motion."""
+    # bypass_csp: the checks inject user-style sheets (zoom, spacing), as a reader's own settings would.
+    ctx, page, errors = new_page(browser, bypass_csp=True)
+
+    @scenario("RGAA 12.7 : lien d'évitement vers le contenu, premier élément au clavier")
+    def r1():
+        setup_group(page)
+        page.goto(URL)
+        expect(page.get_by_role("navigation", name="Navigation principale")).to_be_visible()
+        page.keyboard.press("Tab")
+        skip = page.get_by_role("link", name="Aller au contenu")
+        expect(skip).to_be_focused()
+        box = skip.bounding_box()
+        assert box and box["y"] >= 0, f"lien d'évitement invisible au focus : {box}"
+        page.keyboard.press("Enter")
+        assert page.evaluate("document.activeElement.id") == "contenu", page.evaluate("document.activeElement.outerHTML.slice(0, 80)")
+
+    @scenario("RGAA 8.6 et 9.1 : titre de page par vue, un seul h1, aucun niveau de titre sauté")
+    def r2():
+        problems = []
+        for name in RGAA_TABS:
+            tab(page, name)
+            page.wait_for_timeout(200)
+            if not page.title().startswith(f"{name} – ParcPilote"):
+                problems.append(f"titre « {page.title()} » pour {name}")
+            levels = page.evaluate(HEADINGS_JS)
+            if levels.count(1) != 1:
+                problems.append(f"{name}: {levels.count(1)} h1")
+            for a, b in zip(levels, levels[1:]):
+                if b > a + 1:
+                    problems.append(f"{name}: h{a} suivi de h{b}")
+        assert not problems, " | ".join(problems)
+
+    @scenario("RGAA 10.7 : prise de focus visible sur chaque élément au clavier")
+    def r3():
+        tab(page, "Maintenant")
+        page.wait_for_timeout(300)  # the view change moves focus to <main> (tabindex=-1, not a Tab stop)
+        page.evaluate("window.scrollTo(0, 0)")
+        missing = []
+        for _ in range(25):
+            page.keyboard.press("Tab")
+            info = page.evaluate("""() => { const el = document.activeElement; if (!el || el === document.body) return null;
+              const cs = getComputedStyle(el); const sib = el.matches('input') && el.nextElementSibling ? getComputedStyle(el.nextElementSibling) : null;
+              const visible = (cs.outlineStyle !== 'none' && parseFloat(cs.outlineWidth) >= 2) || (sib && sib.outlineStyle !== 'none' && parseFloat(sib.outlineWidth) >= 2);
+              return { visible, what: (el.textContent || el.name || el.tagName).trim().slice(0, 30) }; }""")
+            if info and not info["visible"]:
+                missing.append(info["what"])
+        assert not missing, f"focus non visible : {missing}"
+
+    @scenario("RGAA 10.11 : aucun défilement horizontal à 320 px de large")
+    def r4():
+        page.set_viewport_size({"width": 320, "height": 640})
+        bad = []
+        for name in RGAA_TABS:
+            tab(page, name)
+            page.wait_for_timeout(250)
+            if (o := overflow_x(page)) > 0:
+                bad.append(f"{name} (+{o}px)")
+        page.set_viewport_size(PHONE["viewport"])
+        assert not bad, f"défilement horizontal : {bad}"
+
+    @scenario("RGAA 10.4 : texte agrandi à 200 % sans perte d'information")
+    def r5():
+        page.add_style_tag(content="html { font-size: 200% !important; }")
+        bad = []
+        for name in RGAA_TABS:
+            tab(page, name)
+            page.wait_for_timeout(250)
+            if (o := overflow_x(page)) > 0:
+                bad.append(f"{name} (+{o}px)")
+        clipped = page.evaluate("""() => [...document.querySelectorAll('main h1, main h2, main p, main button, main label')]
+          .filter((el) => el.offsetParent !== null && !el.closest('.visually-hidden') && el.scrollWidth > el.clientWidth + 2 && getComputedStyle(el).overflow !== 'visible').map((el) => el.textContent.trim().slice(0, 30))""")
+        page.reload()
+        expect(page.get_by_role("navigation", name="Navigation principale")).to_be_visible()
+        assert not bad and not clipped, f"débordement : {bad} ; texte coupé : {clipped}"
+
+    @scenario("RGAA 10.12 : espacement du texte augmenté sans perte de contenu")
+    def r6():
+        page.add_style_tag(content="* { line-height: 1.5 !important; letter-spacing: 0.12em !important; word-spacing: 0.16em !important; } p { margin-bottom: 2em !important; }")
+        bad = []
+        for name in RGAA_TABS:
+            tab(page, name)
+            page.wait_for_timeout(250)
+            if (o := overflow_x(page)) > 0:
+                bad.append(f"{name} (+{o}px)")
+        page.reload()
+        expect(page.get_by_role("navigation", name="Navigation principale")).to_be_visible()
+        assert not bad, f"débordement : {bad}"
+
+    @scenario("WCAG 2.5.8 : cibles tactiles d'au moins 24 px (44 px pour les commandes principales)")
+    def r7():
+        small = []
+        for name in RGAA_TABS:
+            tab(page, name)
+            page.wait_for_timeout(250)
+            for t in page.evaluate(TARGETS_JS):
+                if not t["inline"] and (t["w"] < 24 or t["h"] < 24):
+                    small.append(f"{name}: {t['name']} {t['w']}×{t['h']}")
+            nav = page.get_by_role("navigation", name="Navigation principale").get_by_role("button")
+            for i in range(nav.count()):
+                b = nav.nth(i).bounding_box()
+                if not b or b["height"] < 44:
+                    small.append(f"onglet {i} {b}")
+        assert not small, " | ".join(small[:8])
+
+    @scenario("RGAA 13.8 : animations supprimées si l'appareil le demande")
+    def r8():
+        page.emulate_media(reduced_motion="reduce")
+        tab(page, "Plan")
+        tab(page, "Maintenant")
+        dur = page.evaluate("getComputedStyle(document.querySelector('.ticket')).animationDuration")
+        assert dur in ("1e-05s", "0s") or float(dur.rstrip("s")) < 0.001, dur
+        page.emulate_media(reduced_motion="no-preference")
+
+    @scenario("RGAA 11.10 : erreur de saisie signalée sur le champ, focus placé dessus")
+    def r9():
+        tab(page, "Groupe")
+        page.get_by_label("Nombre de personnes").fill("0")
+        page.get_by_role("button", name="Enregistrer").click()
+        field = page.get_by_label("Nombre de personnes")
+        expect(field).to_be_focused()
+        expect(field).to_have_attribute("aria-invalid", "true")
+        expect(field).to_have_accessible_description(re.compile("entier de 1 à 20"))
+        expect(page.get_by_role("alert")).to_contain_text("un champ est à corriger")
+        field.fill("3")
+        page.get_by_role("button", name="Enregistrer").click()
+        expect(page.get_by_role("alert")).to_have_count(0)
+
+    @scenario("RGAA 13.2 : liens ouvrant une nouvelle fenêtre annoncés")
+    def r10():
+        tab(page, "Groupe")
+        links = page.locator("a[target=_blank]")
+        names = [links.nth(i).evaluate("(a) => a.textContent") for i in range(links.count())]
+        assert names and all("nouvelle fenêtre" in n for n in names), names
+
+    for fn in (r1, r2, r3, r4, r5, r6, r7, r8, r9, r10):
+        fn()
+    console_errors = [e for e in errors if "Failed to load resource" not in e]
+    results.append(("Aucune erreur JavaScript (RGAA)", not console_errors, "; ".join(console_errors)[:300] or "ok"))
+    ctx.close()
+
+    # axe-core on a large screen too (side navigation, two-column layouts).
+    axe = Path(os.environ.get("AXE_PATH", ROOT / "node_modules/axe-core/axe.min.js")).read_text()
+    for scheme in ("light", "dark"):
+        ctx, page, _ = new_page(browser, bypass_csp=True, color_scheme=scheme, viewport={"width": 1366, "height": 900}, is_mobile=False, has_touch=False, device_scale_factor=1)
+
+        @scenario(f"Accessibilité axe-core grand écran, thème {'clair' if scheme == 'light' else 'sombre'}")
+        def wide():
+            setup_group(page)
+            problems = []
+            for name in RGAA_TABS:
+                tab(page, name)
+                page.wait_for_timeout(200)
+                page.add_script_tag(content=axe)
+                res = page.evaluate("axe.run(document, { runOnly: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] })")
+                for v in res["violations"]:
+                    if v["impact"] in ("serious", "critical", "moderate"):
+                        problems.append(f"{name}: {v['id']} ({len(v['nodes'])}) {v['nodes'][0]['target']}")
+            assert not problems, " | ".join(problems)
+
+        wide()
+        ctx.close()
+
+
 def run_single(browser: Browser) -> None:
     ctx = browser.new_context(**PHONE)
     page = ctx.new_page()
@@ -675,7 +865,7 @@ def main() -> int:
         with sync_playwright() as p:
             # --disable-dev-shm-usage: CI containers often have a tiny /dev/shm.
             browser = p.chromium.launch(args=["--disable-dev-shm-usage"])
-            for suite in (run, run_security, run_live, run_map, run_a11y, run_easy, run_single):
+            for suite in (run, run_security, run_live, run_map, run_a11y, run_easy, run_rgaa, run_single):
                 flaky += run_suite(suite, browser)
             browser.close()
     finally:

@@ -2,6 +2,7 @@ import { render } from 'preact';
 import type { FetchFn } from './data/themeparks';
 import { AppStore } from './state/store';
 import type { StorageLike } from './state/storage';
+import { createWorkerPlanner } from './state/workerPlanner';
 import { App } from './ui/App';
 import { StoreContext } from './ui/context';
 import './ui/styles.css';
@@ -25,7 +26,9 @@ function safeStorage(): StorageLike {
   }
 }
 
-const store = new AppStore({ storage: safeStorage(), fetchFn, realNow: () => Date.now() });
+// The day plan is optimised in a worker so taps and scrolling stay instant.
+const planner = typeof Worker === 'function' ? createWorkerPlanner() : null;
+const store = new AppStore({ storage: safeStorage(), fetchFn, realNow: () => Date.now(), planner });
 store.start();
 
 document.addEventListener('visibilitychange', () => {

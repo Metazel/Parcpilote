@@ -4,6 +4,7 @@ import { EASY_ACCESS_MAX_PARTY, type GroupProfile, type Pace, type ParkId } from
 import { DEFAULT_PROFILE, parseProfile } from '../../state/storage';
 import { useAppState, useStore } from '../context';
 import { PARK_SHORT } from '../format';
+import { ExternalLink } from '../components/ExternalLink';
 
 const PACES: ReadonlyArray<{ value: Pace; label: string }> = [
   { value: 'slow', label: 'Tranquille' },
@@ -36,6 +37,35 @@ function othersOf(d: Draft): number {
 /** Single Rider is offered to the whole group without child, or to the members outside the card party. */
 function singleRiderOffered(d: Draft): boolean {
   return !d.hasChild || othersOf(d) > 0;
+}
+
+type DraftField = 'size' | 'height' | 'budget' | 'lunchAt';
+interface FieldProblem {
+  readonly field: DraftField;
+  readonly text: string;
+}
+const FIELD_IDS: Readonly<Record<DraftField, string>> = { size: 'size', height: 'height', budget: 'budget', lunchAt: 'lunch-at' };
+
+/** Field-level checks, each with a message that says how to fix the value. */
+function validateDraft(d: Draft): FieldProblem[] {
+  const out: FieldProblem[] = [];
+  const intIn = (v: string, lo: number, hi: number) => v.trim() !== '' && Number.isInteger(Number(v)) && Number(v) >= lo && Number(v) <= hi;
+  if (!intIn(d.size, 1, 20)) out.push({ field: 'size', text: 'Indiquez un nombre entier de 1 à 20 personnes.' });
+  if (d.hasChild && !intIn(d.height, 60, 220)) out.push({ field: 'height', text: 'Indiquez une taille en centimètres, entre 60 et 220.' });
+  const budget = Number(d.budget);
+  if (d.budget.trim() === '' || !Number.isFinite(budget) || budget < 0 || budget > 1000) out.push({ field: 'budget', text: 'Indiquez un montant entre 0 et 1000 €.' });
+  const t = /^(\d{2}):(\d{2})$/.exec(d.lunchAt);
+  const m = t ? Number(t[1]) * 60 + Number(t[2]) : NaN;
+  if (d.lunchEnabled && !(m >= 600 && m <= 960)) out.push({ field: 'lunchAt', text: 'Choisissez une heure entre 10:00 et 16:00.' });
+  return out;
+}
+
+function FieldError({ id, text }: { id: string; text: string | null }) {
+  return text ? (
+    <span class="field-error" id={id}>
+      {text}
+    </span>
+  ) : null;
 }
 
 function toDraft(p: GroupProfile): Draft {
@@ -85,10 +115,11 @@ function DataSettings() {
 
   return (
     <>
-      <h2>Données</h2>
+      <section class="form-section" aria-labelledby="sec-data">
+      <h2 id="sec-data">Données</h2>
       <fieldset>
         <legend>Source des temps d'attente</legend>
-        <div class="segmented">
+        <div class="segmented joined">
           <label>
             <input type="radio" name="source" checked={persisted.settings.source === 'auto'} onChange={() => store.setSource('auto')} />
             <span>En direct si disponible</span>
@@ -122,7 +153,7 @@ function DataSettings() {
           </form>
           <fieldset>
             <legend>Vitesse de l'horloge</legend>
-            <div class="segmented">
+            <div class="segmented joined">
               {([1, 10, 60] as const).map((s) => (
                 <label key={s}>
                   <input type="radio" name="speed" checked={clock.speed === s} onChange={() => store.setDemoSpeed(s)} />
@@ -136,15 +167,20 @@ function DataSettings() {
           </button>
         </section>
       )}
+      </section>
 
-      <h2>Position</h2>
+      <section class="form-section" aria-labelledby="sec-position">
+      <h2 id="sec-position">Position</h2>
       <label class="toggle">
         <input type="checkbox" checked={persisted.settings.useGps} onChange={(e) => store.setUseGps((e.target as HTMLInputElement).checked)} />
         <span>Utiliser la position du téléphone dans les parcs</span>
       </label>
       <p class="hint">Traitée uniquement sur cet appareil. Sans elle, la position est celle de la dernière étape terminée. Position utilisée : {store.currentPosition().key === 'gps' ? 'celle du téléphone' : 'dernière étape terminée ou entrée du parc'}.</p>
 
-      <h2>Journée</h2>
+      </section>
+
+      <section class="form-section" aria-labelledby="sec-reset">
+      <h2 id="sec-reset">Journée</h2>
       {confirmReset ? (
         <div class="row">
           <button
@@ -167,6 +203,20 @@ function DataSettings() {
         </button>
       )}
       <p class="hint">Efface les étapes faites, les séances et Premier Access enregistrés. Votre liste et votre groupe sont conservés.</p>
+      </section>
+
+      <section class="form-section" aria-labelledby="sec-a11y">
+        <h2 id="sec-a11y">Accessibilité</h2>
+        <p>
+          L'application suit le référentiel général d'amélioration de l'accessibilité (RGAA 4.1) : navigation complète au clavier, liens d'évitement, contrastes
+          renforcés, texte agrandissable jusqu'à 200 %, affichage sans défilement horizontal dès 320 pixels de large, thème sombre, animations désactivées si
+          votre appareil le demande, police conçue pour la lisibilité.
+        </p>
+        <p class="hint">
+          Conformité non auditée : ces points sont vérifiés par des tests automatisés à chaque version, sans audit RGAA indépendant. Pour signaler une difficulté,
+          ouvrez une demande sur le <ExternalLink href="https://github.com/Metazel/Parcpilote/issues">dépôt du projet</ExternalLink>.
+        </p>
+      </section>
     </>
   );
 }
@@ -175,21 +225,27 @@ export function ProfileScreen({ onboarding, onDone }: { onboarding: boolean; onD
   const store = useStore();
   const { persisted } = useAppState();
   const [draft, setDraft] = useState<Draft>(() => toDraft(persisted.profile ?? DEFAULT_PROFILE));
-  const [error, setError] = useState<string | null>(null);
+  const [errors, setErrors] = useState<FieldProblem[]>([]);
   const [saved, setSaved] = useState(false);
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => {
     setSaved(false);
     setDraft((d) => ({ ...d, [k]: v }));
   };
 
+  const errorOf = (field: DraftField) => errors.find((x) => x.field === field)?.text ?? null;
+
   const submit = (e: Event) => {
     e.preventDefault();
-    const profile = fromDraft(draft);
+    const found = validateDraft(draft);
+    const profile = found.length === 0 ? fromDraft(draft) : null;
     if (!profile) {
-      setError('Vérifiez les valeurs : groupe de 1 à 20 personnes, taille entre 60 et 220 cm, budget entre 0 et 1000 €, déjeuner entre 10:00 et 16:00.');
+      const list: FieldProblem[] = found.length > 0 ? found : [{ field: 'size', text: 'Vérifiez les valeurs saisies.' }];
+      setErrors(list);
+      // Focus the first field to correct (RGAA 11.10).
+      document.getElementById(FIELD_IDS[list[0]!.field])?.focus();
       return;
     }
-    setError(null);
+    setErrors([]);
     store.saveProfile(profile);
     setSaved(true);
     onDone();
@@ -200,121 +256,187 @@ export function ProfileScreen({ onboarding, onDone }: { onboarding: boolean; onD
       <h1>{onboarding ? 'Votre groupe' : 'Groupe et réglages'}</h1>
       {onboarding && <p class="muted">Quelques réglages pour calculer un itinéraire adapté à votre groupe. Tout reste sur ce téléphone.</p>}
       <form onSubmit={submit} noValidate>
-        <div class="field">
-          <label for="size">Nombre de personnes</label>
-          <input id="size" type="number" inputMode="numeric" min={1} max={20} value={draft.size} onInput={(e) => set('size', (e.target as HTMLInputElement).value)} />
-        </div>
+        {errors.length > 0 && (
+          <div role="alert" class="banner banner-error">
+            <p>Le profil n'est pas enregistré : {errors.length === 1 ? 'un champ est à corriger' : `${errors.length} champs sont à corriger`}.</p>
+          </div>
+        )}
 
-        <label class="toggle">
-          <input type="checkbox" checked={draft.hasChild} onChange={(e) => set('hasChild', (e.target as HTMLInputElement).checked)} />
-          <span>Il y a un enfant dans le groupe</span>
-        </label>
-        {draft.hasChild && (
+        <section class="form-section" aria-labelledby="sec-who">
+          <h2 id="sec-who">Qui vient</h2>
           <div class="field">
-            <label for="height">Taille du plus petit (cm)</label>
-            <input id="height" type="number" inputMode="numeric" min={60} max={220} value={draft.height} onInput={(e) => set('height', (e.target as HTMLInputElement).value)} />
-            <span class="hint">Sert à écarter les attractions interdites sous une certaine taille.</span>
+            <label for="size">Nombre de personnes</label>
+            <input
+              id="size"
+              type="number"
+              inputMode="numeric"
+              min={1}
+              max={20}
+              value={draft.size}
+              aria-invalid={errorOf('size') ? 'true' : undefined}
+              aria-describedby={errorOf('size') ? 'size-error' : undefined}
+              onInput={(e) => set('size', (e.target as HTMLInputElement).value)}
+            />
+            <FieldError id="size-error" text={errorOf('size')} />
           </div>
-        )}
 
-        <label class="toggle">
-          <input type="checkbox" checked={draft.easyAccess} onChange={(e) => set('easyAccess', (e.target as HTMLInputElement).checked)} />
-          <span>Une personne a la Carte Facilité (ALD)</span>
-        </label>
-        {draft.easyAccess && (
-          <p class="hint">
-            Le titulaire s'inscrit à l'entrée Premier Access d'une attraction et reçoit une heure de retour égale à l'attente ; une seule inscription à la fois. Le plan
-            occupe ce délai avec d'autres attractions en file normale. Le titulaire passe avec 4 accompagnateurs au plus, enfants compris.
-            {othersOf(draft) > 0 &&
-              ` Les ${othersOf(draft)} autres personnes font chaque attraction de leur côté et vous retrouvent à la sortie.`}
-          </p>
-        )}
-
-        <label class="toggle">
-          <input
-            type="checkbox"
-            checked={draft.singleRiderOk && singleRiderOffered(draft)}
-            disabled={!singleRiderOffered(draft)}
-            onChange={(e) => set('singleRiderOk', (e.target as HTMLInputElement).checked)}
-          />
-          <span>
-            {draft.hasChild && othersOf(draft) > 0
-              ? `Les ${othersOf(draft)} personnes hors carte acceptent la file Single Rider`
-              : "Accepter d'être séparés (file Single Rider)"}
-          </span>
-        </label>
-        {!singleRiderOffered(draft) && <p class="hint">Jamais proposé quand un enfant est dans le groupe, sauf pour les personnes hors Carte Facilité.</p>}
-
-        <div class="field">
-          <label for="budget">Budget Premier Access par personne (€)</label>
-          <input id="budget" type="number" inputMode="decimal" min={0} max={1000} value={draft.budget} onInput={(e) => set('budget', (e.target as HTMLInputElement).value)} />
-          <span class="hint">0 : aucun conseil d'achat.</span>
-        </div>
-
-        <fieldset>
-          <legend>Rythme de marche</legend>
-          <div class="segmented">
-            {PACES.map((p) => (
-              <label key={p.value}>
-                <input type="radio" name="pace" checked={draft.pace === p.value} onChange={() => set('pace', p.value)} />
-                <span>{p.label}</span>
-              </label>
-            ))}
-          </div>
-        </fieldset>
-
-        <label class="toggle">
-          <input type="checkbox" checked={draft.stroller} onChange={(e) => set('stroller', (e.target as HTMLInputElement).checked)} />
-          <span>Avec une poussette</span>
-        </label>
-
-        <label class="toggle">
-          <input type="checkbox" checked={draft.lunchEnabled} onChange={(e) => set('lunchEnabled', (e.target as HTMLInputElement).checked)} />
-          <span>Prévoir une pause déjeuner</span>
-        </label>
-        {draft.lunchEnabled && (
-          <div class="row">
-            <div class="field">
-              <label for="lunch-at">Vers</label>
-              <input id="lunch-at" type="time" min="10:00" max="16:00" value={draft.lunchAt} onInput={(e) => set('lunchAt', (e.target as HTMLInputElement).value)} />
+          <label class="toggle">
+            <input type="checkbox" checked={draft.hasChild} onChange={(e) => set('hasChild', (e.target as HTMLInputElement).checked)} />
+            <span>Il y a un enfant dans le groupe</span>
+          </label>
+          {draft.hasChild && (
+            <div class="field field-nested">
+              <label for="height">Taille du plus petit (cm)</label>
+              <input
+                id="height"
+                type="number"
+                inputMode="numeric"
+                min={60}
+                max={220}
+                value={draft.height}
+                aria-invalid={errorOf('height') ? 'true' : undefined}
+                aria-describedby={errorOf('height') ? 'height-error height-hint' : 'height-hint'}
+                onInput={(e) => set('height', (e.target as HTMLInputElement).value)}
+              />
+              <span class="hint" id="height-hint">
+                Sert à écarter les attractions interdites sous une certaine taille.
+              </span>
+              <FieldError id="height-error" text={errorOf('height')} />
             </div>
-            <div class="field">
-              <label for="lunch-duration">Durée</label>
-              <select id="lunch-duration" value={draft.lunchDuration} onChange={(e) => set('lunchDuration', (e.target as HTMLSelectElement).value)}>
-                {['30', '45', '60', '90'].map((m) => (
-                  <option key={m} value={m}>
-                    {m} min
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-        )}
+          )}
+        </section>
 
-        <fieldset>
-          <legend>Parc de départ</legend>
-          <div class="segmented">
-            {(['dlp', 'daw'] as const).map((p) => (
-              <label key={p}>
-                <input type="radio" name="start-park" checked={draft.startPark === p} onChange={() => set('startPark', p)} />
-                <span>{PARK_SHORT[p]}</span>
-              </label>
-            ))}
-          </div>
-        </fieldset>
+        <section class="form-section" aria-labelledby="sec-access">
+          <h2 id="sec-access">Accès et files</h2>
+          <label class="toggle">
+            <input
+              type="checkbox"
+              checked={draft.easyAccess}
+              aria-describedby={draft.easyAccess ? 'easy-hint' : undefined}
+              onChange={(e) => set('easyAccess', (e.target as HTMLInputElement).checked)}
+            />
+            <span>Une personne a la Carte Facilité (ALD)</span>
+          </label>
+          {draft.easyAccess && (
+            <p class="hint field-nested" id="easy-hint">
+              Le titulaire s'inscrit à l'entrée Premier Access d'une attraction et reçoit une heure de retour égale à l'attente ; une seule inscription à la fois. Le
+              plan occupe ce délai avec d'autres attractions en file normale. Le titulaire passe avec 4 accompagnateurs au plus, enfants compris.
+              {othersOf(draft) > 0 && ` Les ${othersOf(draft)} autres personnes font chaque attraction de leur côté et vous retrouvent à la sortie.`}
+            </p>
+          )}
 
-        <label class="toggle">
-          <input type="checkbox" checked={draft.emhAccess} onChange={(e) => set('emhAccess', (e.target as HTMLInputElement).checked)} />
-          <span>Accès aux Heures de Magie en Plus</span>
-        </label>
-        <p class="hint">Hôtels Disney et certains pass annuels : accès à quelques attractions avant l'ouverture officielle, selon les horaires publiés du jour.</p>
+          <label class="toggle">
+            <input
+              type="checkbox"
+              checked={draft.singleRiderOk && singleRiderOffered(draft)}
+              disabled={!singleRiderOffered(draft)}
+              aria-describedby={singleRiderOffered(draft) ? undefined : 'sr-hint'}
+              onChange={(e) => set('singleRiderOk', (e.target as HTMLInputElement).checked)}
+            />
+            <span>
+              {draft.hasChild && othersOf(draft) > 0 ? `Les ${othersOf(draft)} personnes hors carte acceptent la file Single Rider` : "Accepter d'être séparés (file Single Rider)"}
+            </span>
+          </label>
+          {!singleRiderOffered(draft) && (
+            <p class="hint field-nested" id="sr-hint">
+              Jamais proposé quand un enfant est dans le groupe, sauf pour les personnes hors Carte Facilité.
+            </p>
+          )}
 
-        {error && (
-          <p role="alert" class="banner">
-            {error}
+          <label class="toggle">
+            <input type="checkbox" checked={draft.emhAccess} aria-describedby="emh-hint" onChange={(e) => set('emhAccess', (e.target as HTMLInputElement).checked)} />
+            <span>Accès aux Heures de Magie en Plus</span>
+          </label>
+          <p class="hint field-nested" id="emh-hint">
+            Hôtels Disney et certains pass annuels : accès à quelques attractions avant l'ouverture officielle, selon les horaires publiés du jour.
           </p>
-        )}
-        <div class="row">
+
+          <div class="field">
+            <label for="budget">Budget Premier Access par personne (€)</label>
+            <input
+              id="budget"
+              type="number"
+              inputMode="decimal"
+              min={0}
+              max={1000}
+              value={draft.budget}
+              aria-invalid={errorOf('budget') ? 'true' : undefined}
+              aria-describedby={errorOf('budget') ? 'budget-error budget-hint' : 'budget-hint'}
+              onInput={(e) => set('budget', (e.target as HTMLInputElement).value)}
+            />
+            <span class="hint" id="budget-hint">
+              0 : aucun conseil d'achat.
+            </span>
+            <FieldError id="budget-error" text={errorOf('budget')} />
+          </div>
+        </section>
+
+        <section class="form-section" aria-labelledby="sec-day">
+          <h2 id="sec-day">Rythme de la journée</h2>
+          <fieldset>
+            <legend>Parc de départ</legend>
+            <div class="segmented joined">
+              {(['dlp', 'daw'] as const).map((p) => (
+                <label key={p}>
+                  <input type="radio" name="start-park" checked={draft.startPark === p} onChange={() => set('startPark', p)} />
+                  <span>{PARK_SHORT[p]}</span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend>Rythme de marche</legend>
+            <div class="segmented joined">
+              {PACES.map((p) => (
+                <label key={p.value}>
+                  <input type="radio" name="pace" checked={draft.pace === p.value} onChange={() => set('pace', p.value)} />
+                  <span>{p.label}</span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+
+          <label class="toggle">
+            <input type="checkbox" checked={draft.stroller} onChange={(e) => set('stroller', (e.target as HTMLInputElement).checked)} />
+            <span>Avec une poussette</span>
+          </label>
+
+          <label class="toggle">
+            <input type="checkbox" checked={draft.lunchEnabled} onChange={(e) => set('lunchEnabled', (e.target as HTMLInputElement).checked)} />
+            <span>Prévoir une pause déjeuner</span>
+          </label>
+          {draft.lunchEnabled && (
+            <div class="row field-nested">
+              <div class="field">
+                <label for="lunch-at">Vers</label>
+                <input
+                  id="lunch-at"
+                  type="time"
+                  min="10:00"
+                  max="16:00"
+                  value={draft.lunchAt}
+                  aria-invalid={errorOf('lunchAt') ? 'true' : undefined}
+                  aria-describedby={errorOf('lunchAt') ? 'lunch-error' : undefined}
+                  onInput={(e) => set('lunchAt', (e.target as HTMLInputElement).value)}
+                />
+                <FieldError id="lunch-error" text={errorOf('lunchAt')} />
+              </div>
+              <div class="field">
+                <label for="lunch-duration">Durée</label>
+                <select id="lunch-duration" value={draft.lunchDuration} onChange={(e) => set('lunchDuration', (e.target as HTMLSelectElement).value)}>
+                  {['30', '45', '60', '90'].map((m) => (
+                    <option key={m} value={m}>
+                      {m} min
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )}
+        </section>
+
+        <div class="form-submit">
           <button class="btn btn-primary" type="submit">
             {onboarding ? 'Commencer la visite' : 'Enregistrer'}
           </button>
@@ -327,7 +449,7 @@ export function ProfileScreen({ onboarding, onDone }: { onboarding: boolean; onD
       {!onboarding && <DataSettings />}
 
       <p class="footer-note">
-        Temps d'attente en direct fournis par <a href="https://themeparks.wiki/" target="_blank" rel="noopener noreferrer">ThemeParks.wiki</a>. Application indépendante, non affiliée à Disney ni à Disneyland Paris. Tailles minimales, durées et positions sont indicatives : vérifiez-les sur place ou dans l'application officielle.
+        Temps d'attente en direct fournis par <ExternalLink href="https://themeparks.wiki/">ThemeParks.wiki</ExternalLink>. Application indépendante, non affiliée à Disney ni à Disneyland Paris. Tailles minimales, durées et positions sont indicatives : vérifiez-les sur place ou dans l'application officielle.
       </p>
     </div>
   );

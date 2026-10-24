@@ -68,7 +68,7 @@ export function MapView({ markers, lines, stops, me, selectedId, onSelect, fallb
     let failed = 0;
     L.tileLayer(TILE_URL, {
       maxZoom: 19,
-      attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a>',
+      attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap<span class="visually-hidden"> (nouvelle fenêtre)</span></a>',
       referrerPolicy: 'strict-origin-when-cross-origin',
     })
       .on('tileload', () => {

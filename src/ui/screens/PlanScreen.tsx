@@ -6,7 +6,15 @@ import { QUEUE_LABEL, REASON_LABEL, STEP_LABEL, minutes, stepTitle } from '../fo
 
 export function PlanScreen({ go }: { go: (tab: Tab) => void }) {
   const store = useStore();
-  const { plan, catalog, persisted, now, snapshot } = useAppState();
+  const { plan, planPending, catalog, persisted, now, snapshot } = useAppState();
+
+  if (!plan && planPending) {
+    return (
+      <div class="empty" role="status">
+        <h1>Calcul de l'itinéraire…</h1>
+      </div>
+    );
+  }
 
   if (!plan || (plan.steps.length === 0 && plan.unplanned.length === 0 && persisted.day.done.length === 0)) {
     return (
@@ -30,17 +38,20 @@ export function PlanScreen({ go }: { go: (tab: Tab) => void }) {
   return (
     <div>
       <h1>Plan du jour</h1>
-      <p class="summary">
-        <span>
-          Fin prévue : <strong class="num">{plan.steps.length > 0 ? formatHM(plan.steps.at(-1)!.endAt) : '—'}</strong>
-        </span>
-        <span>
-          Attente : <strong class="num">{minutes(plan.totals.waitMin)}</strong>
-        </span>
-        <span>
-          Marche : <strong class="num">{minutes(plan.totals.walkMin)}</strong>
-        </span>
-      </p>
+      <dl class="summary">
+        <div>
+          <dt>Fin prévue</dt>
+          <dd class="num">{plan.steps.length > 0 ? formatHM(plan.steps.at(-1)!.endAt) : '—'}</dd>
+        </div>
+        <div>
+          <dt>Attente</dt>
+          <dd class="num">{minutes(plan.totals.waitMin)}</dd>
+        </div>
+        <div>
+          <dt>Marche</dt>
+          <dd class="num">{minutes(plan.totals.walkMin)}</dd>
+        </div>
+      </dl>
 
       {snapshot &&
         (['dlp', 'daw'] as const).map((park) => {
@@ -54,12 +65,14 @@ export function PlanScreen({ go }: { go: (tab: Tab) => void }) {
           );
         })}
 
+      <div class="plan-layout">
+      <div class="plan-route">
       {plan.steps.length > 0 ? (
         <>
         <p class="hint">Heure d'arrivée à chaque attraction, heure de début pour les spectacles et la pause.</p>
         <ol class="route" aria-label="Étapes dans l'ordre">
           {plan.steps.map((s, i) => (
-            <li key={`${s.kind}:${s.targetId}:${i}`} class={`stop ${s.kind} ${s.position.park}`}>
+            <li key={`${s.kind}:${s.targetId}:${i}`} class={`stop ${s.kind} ${s.position.park}${i === 0 ? ' stop-next' : ''}`}>
               <span class="stop-time">{formatHM(s.kind === 'ride' ? s.arriveAt : s.startAt)}</span>
               <span class="stop-rail" aria-hidden="true">
                 <span class="stop-dot" />
@@ -106,10 +119,12 @@ export function PlanScreen({ go }: { go: (tab: Tab) => void }) {
       ) : (
         <p class="muted">Aucune étape faisable pour le moment.</p>
       )}
+      </div>
+      <div class="plan-side">
 
       {plan.droppedAnchors.length > 0 && (
         <section class="panel">
-          <h3>Horaires impossibles à tenir</h3>
+          <h2>Horaires impossibles à tenir</h2>
           <ul class="reasons">
             {plan.droppedAnchors.map((d) => (
               <li key={d.id}>{d.name}</li>
@@ -151,6 +166,8 @@ export function PlanScreen({ go }: { go: (tab: Tab) => void }) {
           </ul>
         </>
       )}
+      </div>
+      </div>
       <p class="hint footer-note">Calculé à {formatHM(plan.computedAt)}, recalculé à chaque mise à jour des attentes. Heure actuelle {formatHM(now)}.</p>
     </div>
   );

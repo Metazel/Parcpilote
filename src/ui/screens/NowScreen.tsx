@@ -4,6 +4,7 @@ import type { PlanStep } from '../../domain/types';
 import { useAppState, useStore } from '../context';
 import type { Tab } from '../context';
 import { PARK_SHORT, QUEUE_LABEL, STEP_LABEL, euros, inMinutes, minutes, stepTitle } from '../format';
+import { ExternalLink } from '../components/ExternalLink';
 
 interface Props {
   readonly go: (tab: Tab) => void;
@@ -67,7 +68,7 @@ function EasyAccessForm({ step }: { step: PlanStep }) {
           {error}
         </p>
       )}
-      <button class="btn btn-primary" type="submit">
+      <button class="btn btn-primary btn-block" type="submit">
         Inscription faite
       </button>
     </form>
@@ -84,17 +85,23 @@ function NextSign({ step, now, report, go }: { step: PlanStep; now: number; repo
   const held = state.persisted.day.easyAccess;
 
   return (
-    <section class={`sign ${step.position.park}`} aria-labelledby="next-title">
-      <p class="sign-kind">
-        Prochaine étape : {STEP_LABEL[step.kind].toLowerCase()}
-        {step.kind !== 'lunch' && step.departAt > now + MINUTE ? `, départ ${inMinutes(step.departAt, now)}` : ''}
-      </p>
-      <h1 id="next-title" class="sign-title">
-        {stepTitle(step)}
-      </h1>
-      <p class="sign-where">
-        {step.kind === 'lunch' ? 'Où vous voulez, près de votre position' : `${place?.land ?? ''}, ${PARK_SHORT[step.position.park]}`}
-      </p>
+    <section class={`sign ticket ${step.kind === 'lunch' ? 'lunch' : step.position.park}`} aria-labelledby="next-title">
+      <div class="ticket-band">
+        <p class="sign-kind">
+          Prochaine étape : {STEP_LABEL[step.kind].toLowerCase()}
+          {step.kind !== 'lunch' && step.departAt > now + MINUTE ? `, départ ${inMinutes(step.departAt, now)}` : ''}
+        </p>
+      </div>
+      <div class="ticket-main">
+        <h1 id="next-title" class="sign-title">
+          {stepTitle(step)}
+        </h1>
+        <p class="sign-where">
+          {step.kind === 'lunch' ? 'Où vous voulez, près de votre position' : `${place?.land ?? ''}, ${PARK_SHORT[step.position.park]}`}
+        </p>
+      </div>
+      <div class="ticket-perf" aria-hidden="true" />
+      <div class="ticket-stub">
       <dl class="facts">
         {step.kind === 'lunch' ? (
           <>
@@ -163,13 +170,13 @@ function NextSign({ step, now, report, go }: { step: PlanStep; now: number; repo
       <OthersNote step={step} />
       {late && <p class="queue-note">Départ conseillé dépassé : y aller maintenant reste possible si vous vous pressez.</p>}
       {booking && <EasyAccessForm step={step} />}
-      <div class="row">
-        {!booking && (
-          <button class="btn btn-primary" type="button" onClick={() => store.completeStep(step)}>
-            {doneLabel(step)}
-          </button>
-        )}
-        <button class="btn" type="button" onClick={() => store.skip(step.targetId)}>
+      {!booking && (
+        <button class="btn btn-primary btn-block" type="button" onClick={() => store.completeStep(step)}>
+          {doneLabel(step)}
+        </button>
+      )}
+      <div class="ticket-actions">
+        <button class="btn btn-quiet" type="button" onClick={() => store.skip(step.targetId)}>
           Passer
         </button>
         {step.targetId && step.walkMin > 0 && (
@@ -182,6 +189,7 @@ function NextSign({ step, now, report, go }: { step: PlanStep; now: number; repo
             Signaler
           </button>
         )}
+      </div>
       </div>
     </section>
   );
@@ -223,7 +231,7 @@ function PremierAccessAdvice() {
 
   return (
     <section class="panel" aria-labelledby="pa-title">
-      <h3 id="pa-title">Premier Access conseillé : {advice.name}</h3>
+      <h2 id="pa-title">Premier Access conseillé : {advice.name}</h2>
       <p>
         Environ {advice.gainMin} min gagnées sur {advice.standbyMin} min d'attente prévue, pour {euros(advice.priceCents)} par personne (
         {euros(advice.groupPriceCents)} pour le groupe). Créneau proposé : {formatHM(advice.returnStart)}–{formatHM(advice.returnEnd)}.
@@ -254,9 +262,9 @@ function PremierAccessAdvice() {
           <button class="btn btn-small" type="button" onClick={() => setOpen(true)}>
             J'ai acheté
           </button>
-          <a class="btn btn-quiet btn-small" href={OFFICIAL_SITE} target="_blank" rel="noopener noreferrer">
+          <ExternalLink class="btn btn-quiet btn-small" href={OFFICIAL_SITE}>
             Site officiel
-          </a>
+          </ExternalLink>
         </div>
       )}
     </section>
@@ -272,7 +280,7 @@ function EasyAccessHeld() {
   const name = catalog.get(held.rideId)?.name ?? held.rideId;
   return (
     <section class="panel" aria-labelledby="easy-title">
-      <h3 id="easy-title">Carte Facilité : {name}</h3>
+      <h2 id="easy-title">Carte Facilité : {name}</h2>
       <p>
         {held.returnAt > now ? `Retour à partir de ${formatHM(held.returnAt)} (${inMinutes(held.returnAt, now)}).` : `Accessible depuis ${formatHM(held.returnAt)}.`} Pas d'autre inscription
         possible d'ici là.
@@ -292,7 +300,7 @@ export function NowScreen({ go, report }: Props) {
   if (!snapshot) {
     return (
       <div class="empty" role="status">
-        <h2>Chargement des temps d'attente…</h2>
+        <h1>Chargement des temps d'attente…</h1>
       </div>
     );
   }
@@ -309,12 +317,21 @@ export function NowScreen({ go, report }: Props) {
     );
   }
 
+  if (!plan && state.planPending) {
+    return (
+      <div class="empty" role="status">
+        <h1>Calcul de l'itinéraire…</h1>
+      </div>
+    );
+  }
+
   const [first, ...rest] = plan?.steps ?? [];
   const doneCount = persisted.day.done.length;
   const parkClosed = Object.values(snapshot.hours).every((h) => now >= h.close || now < h.open - 60 * MINUTE);
 
   return (
-    <div>
+    <div class="now-layout">
+      <div class="now-main">
       {first ? (
         <NextSign step={first} now={now} report={report} go={go} />
       ) : (
@@ -339,16 +356,18 @@ export function NowScreen({ go, report }: Props) {
           </div>
         </div>
       )}
+      </div>
 
+      <div class="now-side">
       <EasyAccessHeld />
 
       <PremierAccessAdvice />
 
       {rest.length > 0 && (
         <section class="panel" aria-labelledby="then-title">
-          <h3 id="then-title">Ensuite</h3>
+          <h2 id="then-title">Ensuite</h2>
           <ol class="reasons">
-            {rest.slice(0, 3).map((s, i) => (
+            {rest.slice(0, 4).map((s, i) => (
               <li key={`${s.kind}:${s.targetId}:${i}`}>
                 <span>{s.kind === 'easy-book' ? `Inscription Carte Facilité : ${s.name}` : stepTitle(s)}</span>
                 <span class="num muted">{formatHM(s.kind === 'ride' || s.kind === 'pa' ? s.arriveAt : s.startAt)}</span>
@@ -362,18 +381,24 @@ export function NowScreen({ go, report }: Props) {
       )}
 
       {plan && (
-        <p class="summary">
-          <span>
-            Incontournables planifiés : <strong class="num">{plan.totals.mustPlanned}/{plan.totals.mustTotal}</strong>
-          </span>
-          <span>
-            Faits aujourd'hui : <strong class="num">{doneCount}</strong>
-          </span>
-          <span>
-            Attente prévue : <strong class="num">{minutes(plan.totals.waitMin)}</strong>
-          </span>
-        </p>
+        <dl class="summary">
+          <div>
+            <dt>Incontournables planifiés</dt>
+            <dd class="num">
+              {plan.totals.mustPlanned}/{plan.totals.mustTotal}
+            </dd>
+          </div>
+          <div>
+            <dt>Faits aujourd'hui</dt>
+            <dd class="num">{doneCount}</dd>
+          </div>
+          <div>
+            <dt>Attente prévue</dt>
+            <dd class="num">{minutes(plan.totals.waitMin)}</dd>
+          </div>
+        </dl>
       )}
+      </div>
     </div>
   );
 }

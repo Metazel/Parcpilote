@@ -4,6 +4,7 @@ import type { DrawnRoute } from '../../state/store';
 import { MapView, type MapLine, type MapMarker, type MapStop } from '../components/MapView';
 import { useAppState, useStore } from '../context';
 import { PARK_SHORT, liveLabel, minutes, stepTitle, waitBand } from '../format';
+import { ExternalLink } from '../components/ExternalLink';
 
 type Layer = 'rides' | 'shows' | PoiKind;
 type NearbyKind = 'ride' | PoiKind;
@@ -201,7 +202,7 @@ export function MapScreen({ report }: { report: (id: string) => void }) {
 
       {sel && (
         <section class="panel" aria-live="polite" aria-labelledby="sel-title">
-          <h3 id="sel-title">{sel.name}</h3>
+          <h2 id="sel-title">{sel.name}</h2>
           <p class="muted">
             {'kind' in sel && (sel.kind === 'ride' || sel.kind === 'show')
               ? `${sel.land}, ${PARK_SHORT[sel.park]}${sel.kind === 'ride' ? ` : ${liveLabel(snapshot?.attractions[sel.id])}` : ''}`
@@ -293,7 +294,7 @@ export function MapScreen({ report }: { report: (id: string) => void }) {
           ))}
       </ul>
       <p class="footer-note">
-        Fond de carte, allées, toilettes et points de restauration : © contributeurs <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a> (ODbL). Le serveur de tuiles voit la zone de carte affichée, jamais votre position.
+        Fond de carte, allées, toilettes et points de restauration : © contributeurs <ExternalLink href="https://www.openstreetmap.org/copyright">OpenStreetMap</ExternalLink> (ODbL). Le serveur de tuiles voit la zone de carte affichée, jamais votre position.
       </p>
     </div>
   );
