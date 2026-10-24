@@ -96,11 +96,11 @@ describe('planner — constraints', () => {
   it('inserts the lunch break at or after the preferred time', () => {
     const plan = computePlan(
       input({
-        profile: profile({ lunch: { enabled: true, atMin: 12 * 60 + 30, durationMin: 45 } }),
+        profile: profile({ lunch: { enabled: true, atMin: 12 * 60 + 30, durationMin: 45, mode: 'free' } }),
         wishList: rides(['dlp-big-thunder', 'dlp-peter-pan', 'dlp-buzz', 'dlp-pirates', 'dlp-phantom-manor', 'dlp-star-tours']),
       }),
     );
-    const lunch = plan.steps.find((s) => s.kind === 'lunch');
+    const lunch = plan.steps.find((s) => s.kind === 'meal');
     expect(lunch).toBeDefined();
     expect(lunch!.startAt).toBeGreaterThanOrEqual(at(12, 30));
     expect(lunch!.startAt).toBeLessThanOrEqual(at(13, 30));
@@ -184,7 +184,7 @@ describe('planner — behaviour', () => {
           { showId: 'daw-show-together', start: startShow },
           { showId: 'dlp-show-parade', start: at(17, 30) },
         ],
-        profile: profile({ lunch: { enabled: true, atMin: 12 * 60 + 30, durationMin: 45 } }),
+        profile: profile({ lunch: { enabled: true, atMin: 12 * 60 + 30, durationMin: 45, mode: 'free' } }),
       }),
     );
     const elapsed = performance.now() - t0;

@@ -45,15 +45,44 @@ export interface Show extends PlaceBase {
 
 export type Place = Attraction | Show;
 
-export type PoiKind = 'toilets' | 'food' | 'water';
+export type PoiKind = 'toilets' | 'food' | 'water' | 'picnic';
 
-/** Service point (restroom, food, drinking water) from OpenStreetMap or the official feed. */
+/** How a place feeds the group: grab-and-go counter or kiosk, or seated table service. */
+export type FoodService = 'quick' | 'table';
+
+/** Service point (restroom, food, drinking water, picnic area) from OpenStreetMap or the official feed. */
 export interface Poi extends GeoPoint {
   readonly id: string;
   readonly kind: PoiKind;
   readonly name: string;
   readonly park: ParkId;
-  readonly source: 'osm' | 'official';
+  readonly source: 'osm' | 'official' | 'resort';
+  /** Food places only. */
+  readonly service: FoodService | null;
+  /** Official page or menu (https only), when known. */
+  readonly url: string | null;
+  /** Outside the park gates: leaving and coming back means a new security check. */
+  readonly outside: boolean;
+}
+
+export type MealSlot = 'lunch' | 'dinner';
+
+/** `free`: a break wherever the group is (the v0.1 behaviour). */
+export type MealMode = 'free' | 'picnic' | 'quick' | 'table';
+
+export interface MealPref {
+  readonly enabled: boolean;
+  /** Preferred start, minutes after midnight. */
+  readonly atMin: number;
+  readonly durationMin: number;
+  readonly mode: MealMode;
+}
+
+/** Where to eat for one meal of the day; null place: the most convenient on the route. */
+export interface MealPick {
+  readonly placeId: string | null;
+  /** Table reservation time, when booked. */
+  readonly reservationAt: number | null;
 }
 
 export type RideStatus = 'OPERATING' | 'DOWN' | 'CLOSED' | 'REFURBISHMENT';
@@ -105,7 +134,8 @@ export interface GroupProfile {
   readonly paBudgetEur: number;
   readonly pace: Pace;
   readonly stroller: boolean;
-  readonly lunch: { readonly enabled: boolean; readonly atMin: number; readonly durationMin: number };
+  readonly lunch: MealPref;
+  readonly dinner: MealPref;
   readonly startPark: ParkId;
   /** Eligible to Extra Magic Hours (Disney hotel guests, some annual passes). */
   readonly emhAccess: boolean;
@@ -153,7 +183,7 @@ export interface WaitCorrection {
 export type QueueKind = 'standby' | 'single' | 'premier' | 'easy';
 
 /** `easy-book`: go to the ride and register the Carte Facilité holder (return time). */
-export type StepKind = 'ride' | 'show' | 'lunch' | 'pa' | 'easy-book';
+export type StepKind = 'ride' | 'show' | 'meal' | 'pa' | 'easy-book';
 
 /** What the members outside the Carte Facilité party do on a ride step. */
 export interface OthersPlan {
@@ -166,7 +196,7 @@ export interface OthersPlan {
 
 export interface PlanStep {
   readonly kind: StepKind;
-  /** Place id; empty string for the lunch break. */
+  /** Place id; empty string for a meal break taken where the group stands. */
   readonly targetId: string;
   readonly name: string;
   readonly position: Position;
@@ -177,7 +207,7 @@ export interface PlanStep {
   readonly queue: QueueKind | null;
   readonly startAt: number;
   readonly endAt: number;
-  /** For time-bound steps (show, Premier Access, lunch): latest departure that still makes it. */
+  /** For time-bound steps (show, Premier Access, meal): latest departure that still makes it. */
   readonly latestDepartAt: number | null;
   /** Ride occurrence today (2 for the second ride of the same attraction), 0 for other steps. */
   readonly rep: number;
@@ -185,6 +215,15 @@ export interface PlanStep {
   readonly returnAt: number | null;
   /** Members outside the Carte Facilité party, on ride steps of a split group; else null. */
   readonly others: OthersPlan | null;
+  /** Meal steps: which meal, how, and whether the table is booked. */
+  readonly meal: {
+    readonly slot: MealSlot;
+    readonly mode: MealMode;
+    /** Table reservation time, when booked. */
+    readonly reservationAt: number | null;
+    readonly reentryMin: number;
+    readonly url: string | null;
+  } | null;
 }
 
 /** `repeat`: planned at least once, but not as many times as wished. */

@@ -49,3 +49,16 @@ export function safeId(v: Json): string | null {
   const s = str(v, 80);
   return s && /^[A-Za-z0-9_.:-]+$/.test(s) ? s : null;
 }
+
+/** External link from untrusted data: https only, no credentials, bounded length; else null. */
+export function safeUrl(v: Json): string | null {
+  const s = str(v, 300);
+  if (!s) return null;
+  try {
+    const u = new URL(s);
+    if (u.protocol !== 'https:' || u.username || u.password || !u.hostname.includes('.')) return null;
+    return u.href;
+  } catch {
+    return null;
+  }
+}

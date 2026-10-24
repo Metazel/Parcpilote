@@ -1,6 +1,6 @@
 # ParcPilote
 
-Assistant de visite pour Disneyland Paris : à tout moment, la meilleure prochaine étape pour le groupe, en tenant compte des temps d'attente en direct, de la marche, des spectacles choisis, du Single Rider, du Premier Access et de la Carte Facilité. Version 0.4.0.
+Assistant de visite pour Disneyland Paris : à tout moment, la meilleure prochaine étape pour le groupe, en tenant compte des temps d'attente en direct, de la marche, des spectacles choisis, du Single Rider, du Premier Access et de la Carte Facilité. Version 0.5.0.
 
 ## Ce que fait l'application
 
@@ -13,6 +13,7 @@ Assistant de visite pour Disneyland Paris : à tout moment, la meilleure prochai
 - **Carte Facilité (ALD)** : le titulaire s'inscrit à l'entrée Premier Access d'une attraction et reçoit une heure de retour égale à l'attente ; une seule inscription à la fois. Le plan place l'inscription, occupe le délai avec d'autres attractions en file normale, puis revient à l'heure de retour. L'heure donnée par le Cast Member est saisie dans l'application et remplace la prévision.
 - **Groupe scindé** : le titulaire passe avec 4 accompagnateurs au plus, enfants compris ; au-delà, les autres personnes font chaque attraction de leur côté (Single Rider si accepté) et retrouvent le groupe à la sortie. Si aucune file ne leur permet de sortir à moins de 10 min du groupe, le plan le dit.
 - **Heures de Magie en Plus** : lues dans les horaires officiels du jour ; si le groupe y a droit (hôtels Disney, certains pass), le plan commence par les attractions ouvertes avant l'ouverture officielle. Avant l'ouverture, les attractions fermées sont planifiées à partir de l'heure d'ouverture au lieu d'être écartées.
+- **Repas** : déjeuner et dîner, chacun « sur le pouce » (comptoir, kiosque, food truck), « à table » (restaurant avec service, avec heure de réservation) ou en pique-nique. Le plan choisit le lieu le plus pratique sur le parcours, ou celui que vous indiquez dans Ma liste, compte la marche et la durée moyenne (30, 75 ou 40 min, modifiables) et se cale sur la réservation. À Disneyland Paris, l'aire de pique-nique est hors des parcs : la sortie et le nouveau contrôle de sécurité (15 min) sont comptés. Restaurants à table, comptoirs et aires de pique-nique sur la carte ; lien vers le menu (OpenStreetMap) ou vers la page officielle des restaurants.
 - **Alertes** dans l'application : panne, réouverture, attente qui chute, départ pour un spectacle, données trop anciennes.
 - **Premier Access** : conseil chiffré (minutes gagnées, prix), puis saisie du créneau acheté qui devient une étape du plan.
 - **Mode démo** déterministe : journée simulée, horloge accélérée, pannes déclenchables. Il sert aussi à préparer sa visite la veille.
@@ -77,9 +78,9 @@ Le workflow `.github/workflows/ci.yml` vérifie, construit, teste puis publie l'
 
 | Job | Contenu |
 | --- | --- |
-| `verify` | types, lint, 94 tests unitaires, `npm audit` |
+| `verify` | types, lint, 108 tests unitaires, `npm audit` |
 | `build` | PWA (`dist/`) et fichier unique (`dist-single/`) ; artefact Pages sur `main` |
-| `e2e` | 43 scénarios Playwright (dont accessibilité RGAA), captures en artefact ; une suite en échec est rejouée une fois, les instabilités sont signalées en annotation |
+| `e2e` | 47 scénarios Playwright (dont accessibilité RGAA), captures en artefact ; une suite en échec est rejouée une fois, les instabilités sont signalées en annotation |
 | `deploy` | publication GitHub Pages (push ou lancement manuel sur `main`) |
 
 Les pull requests passent les trois premiers jobs sans publier. Un passage hebdomadaire rejoue l'audit. Les actions sont épinglées par empreinte SHA, les permissions limitées par job ; le workflow est contrôlé par `actionlint` et `zizmor`. Dependabot (`.github/dependabot.yml`) propose chaque semaine les mises à jour npm, pip et GitHub Actions, avec un délai de 14 jours.

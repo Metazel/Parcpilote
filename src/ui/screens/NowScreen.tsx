@@ -3,7 +3,8 @@ import { MINUTE, formatHM, parkWallTime } from '../../domain/time';
 import type { PlanStep } from '../../domain/types';
 import { useAppState, useStore } from '../context';
 import type { Tab } from '../context';
-import { PARK_SHORT, QUEUE_LABEL, STEP_LABEL, euros, inMinutes, minutes, stepTitle } from '../format';
+import { MEAL_MODE_LABEL, MEAL_SLOT_LABEL, PARK_SHORT, QUEUE_LABEL, STEP_LABEL, euros, inMinutes, minutes, stepTitle } from '../format';
+import { DLP_DINING } from '../../data/resort';
 import { ExternalLink } from '../components/ExternalLink';
 
 interface Props {
@@ -17,8 +18,8 @@ function doneLabel(step: PlanStep): string {
   switch (step.kind) {
     case 'show':
       return 'Spectacle vu';
-    case 'lunch':
-      return 'Pause terminée';
+    case 'meal':
+      return 'Repas terminé';
     default:
       return 'Attraction faite';
   }
@@ -35,6 +36,27 @@ function OthersNote({ step }: { step: PlanStep }) {
         ? `${who} : ${QUEUE_LABEL[o.queue]}, environ ${minutes(o.waitMin)} d'attente. Retrouvailles à la sortie vers ${formatHM(step.endAt)}.`
         : `${who} : pas de file assez rapide ici. Pause ou attraction voisine, retrouvailles à la sortie vers ${formatHM(step.endAt)}.`}
     </p>
+  );
+}
+
+/** Practical notes for a meal stop: way out for a picnic, booking, menu. */
+function MealNotes({ step }: { step: PlanStep }) {
+  const meal = step.meal!;
+  return (
+    <>
+      {meal.reentryMin > 0 && (
+        <p class="queue-note">Sortie du parc, puis nouveau contrôle de sécurité au retour : {minutes(meal.reentryMin)} comptées dans la durée.</p>
+      )}
+      {meal.mode === 'table' && meal.reservationAt === null && (
+        <p class="queue-note">Réservation conseillée : indiquez votre créneau dans Ma liste, rubrique Repas, pour caler le plan dessus.</p>
+      )}
+      {meal.mode === 'free' && <p class="queue-note">Pause où vous voulez, sans détour.</p>}
+      {(meal.mode === 'quick' || meal.mode === 'table') && step.targetId && (
+        <p class="queue-note">
+          <ExternalLink href={meal.url ?? DLP_DINING.restaurantsUrl}>{meal.url ? 'Voir le menu' : 'Menus sur le site officiel'}</ExternalLink>
+        </p>
+      )}
+    </>
   );
 }
 
@@ -79,43 +101,48 @@ function NextSign({ step, now, report, go }: { step: PlanStep; now: number; repo
   const store = useStore();
   const state = useAppState();
   const place = step.targetId ? state.catalog.get(step.targetId) : undefined;
-  const timed = step.latestDepartAt !== null && step.kind !== 'lunch';
+  const meal = step.kind === 'meal' ? step.meal : null;
+  const timed = step.latestDepartAt !== null && step.kind !== 'meal';
   const late = timed && step.latestDepartAt! < now;
   const booking = step.kind === 'easy-book';
   const held = state.persisted.day.easyAccess;
 
   return (
-    <section class={`sign ticket ${step.kind === 'lunch' ? 'lunch' : step.position.park}`} aria-labelledby="next-title">
+    <section class={`sign ticket ${meal ? 'meal' : step.position.park}`} aria-labelledby="next-title">
       <div class="ticket-band">
         <p class="sign-kind">
-          Prochaine étape : {STEP_LABEL[step.kind].toLowerCase()}
-          {step.kind !== 'lunch' && step.departAt > now + MINUTE ? `, départ ${inMinutes(step.departAt, now)}` : ''}
+          Prochaine étape : {meal ? `${MEAL_SLOT_LABEL[meal.slot].toLowerCase()}, ${MEAL_MODE_LABEL[meal.mode].toLowerCase()}` : STEP_LABEL[step.kind].toLowerCase()}
+          {step.departAt > now + MINUTE ? `, départ ${inMinutes(step.departAt, now)}` : ''}
         </p>
       </div>
       <div class="ticket-main">
         <h1 id="next-title" class="sign-title">
-          {stepTitle(step)}
+          {meal ? (step.targetId ? step.name : MEAL_SLOT_LABEL[meal.slot]) : stepTitle(step)}
         </h1>
         <p class="sign-where">
-          {step.kind === 'lunch' ? 'Où vous voulez, près de votre position' : `${place?.land ?? ''}, ${PARK_SHORT[step.position.park]}`}
+          {meal
+            ? step.targetId
+              ? `${PARK_SHORT[step.position.park]}${meal.reentryMin > 0 ? ', hors des parcs' : ''}`
+              : 'Où vous voulez, près de votre position'
+            : `${place?.land ?? ''}, ${PARK_SHORT[step.position.park]}`}
         </p>
       </div>
       <div class="ticket-perf" aria-hidden="true" />
       <div class="ticket-stub">
       <dl class="facts">
-        {step.kind === 'lunch' ? (
+        {meal ? (
           <>
             <div>
-              <dt>début</dt>
-              <dd>{formatHM(step.startAt)}</dd>
+              <dt>{step.targetId ? 'de marche' : 'au plus tard'}</dt>
+              <dd>{step.targetId ? minutes(step.walkMin) : formatHM(step.latestDepartAt ?? step.startAt)}</dd>
+            </div>
+            <div>
+              <dt>{meal.reservationAt !== null ? 'réservation' : 'début'}</dt>
+              <dd>{formatHM(meal.reservationAt ?? step.startAt)}</dd>
             </div>
             <div>
               <dt>durée</dt>
               <dd>{minutes(Math.round((step.endAt - step.startAt) / MINUTE))}</dd>
-            </div>
-            <div>
-              <dt>au plus tard</dt>
-              <dd>{formatHM(step.latestDepartAt ?? step.startAt)}</dd>
             </div>
           </>
         ) : booking ? (
@@ -168,6 +195,7 @@ function NextSign({ step, now, report, go }: { step: PlanStep; now: number; repo
         </p>
       )}
       <OthersNote step={step} />
+      {meal && <MealNotes step={step} />}
       {late && <p class="queue-note">Départ conseillé dépassé : y aller maintenant reste possible si vous vous pressez.</p>}
       {booking && <EasyAccessForm step={step} />}
       {!booking && (
@@ -176,7 +204,7 @@ function NextSign({ step, now, report, go }: { step: PlanStep; now: number; repo
         </button>
       )}
       <div class="ticket-actions">
-        <button class="btn btn-quiet" type="button" onClick={() => store.skip(step.targetId)}>
+        <button class="btn btn-quiet" type="button" onClick={() => store.skipStep(step)}>
           Passer
         </button>
         {step.targetId && step.walkMin > 0 && (
@@ -184,7 +212,7 @@ function NextSign({ step, now, report, go }: { step: PlanStep; now: number; repo
             Voir le trajet
           </button>
         )}
-        {step.targetId && (
+        {step.targetId && !meal && (
           <button class="btn btn-quiet" type="button" onClick={() => report(step.targetId)}>
             Signaler
           </button>
@@ -231,7 +259,7 @@ function PremierAccessAdvice() {
 
   return (
     <section class="panel" aria-labelledby="pa-title">
-      <h2 id="pa-title">Premier Access conseillé : {advice.name}</h2>
+      <h2 id="pa-title">Premier Access conseillé{'\u00a0'}: {advice.name}</h2>
       <p>
         Environ {advice.gainMin} min gagnées sur {advice.standbyMin} min d'attente prévue, pour {euros(advice.priceCents)} par personne (
         {euros(advice.groupPriceCents)} pour le groupe). Créneau proposé : {formatHM(advice.returnStart)}–{formatHM(advice.returnEnd)}.
@@ -280,7 +308,7 @@ function EasyAccessHeld() {
   const name = catalog.get(held.rideId)?.name ?? held.rideId;
   return (
     <section class="panel" aria-labelledby="easy-title">
-      <h2 id="easy-title">Carte Facilité : {name}</h2>
+      <h2 id="easy-title">Carte Facilité{'\u00a0'}: {name}</h2>
       <p>
         {held.returnAt > now ? `Retour à partir de ${formatHM(held.returnAt)} (${inMinutes(held.returnAt, now)}).` : `Accessible depuis ${formatHM(held.returnAt)}.`} Pas d'autre inscription
         possible d'ici là.

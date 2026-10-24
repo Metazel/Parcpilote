@@ -1,9 +1,9 @@
 import { useState } from 'preact/hooks';
 import { formatHM, parkWallTime } from '../../domain/time';
-import { EASY_ACCESS_MAX_PARTY, type GroupProfile, type Pace, type ParkId } from '../../domain/types';
-import { DEFAULT_PROFILE, parseProfile } from '../../state/storage';
+import { EASY_ACCESS_MAX_PARTY, type GroupProfile, type MealMode, type MealPref, type MealSlot, type Pace, type ParkId } from '../../domain/types';
+import { DEFAULT_PROFILE, MEAL_WINDOWS, parseProfile } from '../../state/storage';
 import { useAppState, useStore } from '../context';
-import { PARK_SHORT } from '../format';
+import { MEAL_MODE_LABEL, MEAL_SLOT_LABEL, PARK_SHORT } from '../format';
 import { ExternalLink } from '../components/ExternalLink';
 
 const PACES: ReadonlyArray<{ value: Pace; label: string }> = [
@@ -20,9 +20,7 @@ interface Draft {
   budget: string;
   pace: Pace;
   stroller: boolean;
-  lunchEnabled: boolean;
-  lunchAt: string;
-  lunchDuration: string;
+  meals: Record<MealSlot, MealDraft>;
   startPark: ParkId;
   emhAccess: boolean;
   easyAccess: boolean;
@@ -39,12 +37,30 @@ function singleRiderOffered(d: Draft): boolean {
   return !d.hasChild || othersOf(d) > 0;
 }
 
-type DraftField = 'size' | 'height' | 'budget' | 'lunchAt';
+interface MealDraft {
+  enabled: boolean;
+  at: string;
+  duration: string;
+  mode: MealMode;
+}
+
+/** Typical time for each way of eating, queue included (the user can change it). */
+const MEAL_DURATION: Readonly<Record<MealMode, number>> = { free: 45, picnic: 40, quick: 30, table: 75 };
+const MEAL_MODES: readonly MealMode[] = ['quick', 'table', 'picnic', 'free'];
+const DURATIONS = ['20', '30', '40', '45', '60', '75', '90', '120'];
+
+const hhmm = (min: number) => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
+const minutesOf = (v: string) => {
+  const t = /^(\d{2}):(\d{2})$/.exec(v);
+  return t ? Number(t[1]) * 60 + Number(t[2]) : NaN;
+};
+
+type DraftField = 'size' | 'height' | 'budget' | 'lunchAt' | 'dinnerAt';
 interface FieldProblem {
   readonly field: DraftField;
   readonly text: string;
 }
-const FIELD_IDS: Readonly<Record<DraftField, string>> = { size: 'size', height: 'height', budget: 'budget', lunchAt: 'lunch-at' };
+const FIELD_IDS: Readonly<Record<DraftField, string>> = { size: 'size', height: 'height', budget: 'budget', lunchAt: 'lunch-at', dinnerAt: 'dinner-at' };
 
 /** Field-level checks, each with a message that says how to fix the value. */
 function validateDraft(d: Draft): FieldProblem[] {
@@ -54,11 +70,80 @@ function validateDraft(d: Draft): FieldProblem[] {
   if (d.hasChild && !intIn(d.height, 60, 220)) out.push({ field: 'height', text: 'Indiquez une taille en centimètres, entre 60 et 220.' });
   const budget = Number(d.budget);
   if (d.budget.trim() === '' || !Number.isFinite(budget) || budget < 0 || budget > 1000) out.push({ field: 'budget', text: 'Indiquez un montant entre 0 et 1000 €.' });
-  const t = /^(\d{2}):(\d{2})$/.exec(d.lunchAt);
-  const m = t ? Number(t[1]) * 60 + Number(t[2]) : NaN;
-  if (d.lunchEnabled && !(m >= 600 && m <= 960)) out.push({ field: 'lunchAt', text: 'Choisissez une heure entre 10:00 et 16:00.' });
+  for (const slot of ['lunch', 'dinner'] as const) {
+    const meal = d.meals[slot];
+    const [lo, hi] = MEAL_WINDOWS[slot];
+    const m = minutesOf(meal.at);
+    if (meal.enabled && !(m >= lo && m <= hi)) out.push({ field: `${slot}At`, text: `Choisissez une heure entre ${hhmm(lo)} et ${hhmm(hi)}.` });
+  }
   return out;
 }
+
+/** One meal: on/off, how the group eats, when, and for how long. */
+function MealFields({ slot, meal, error, onChange }: { slot: MealSlot; meal: MealDraft; error: string | null; onChange: (m: MealDraft) => void }) {
+  const id = `${slot}`;
+  const label = MEAL_SLOT_LABEL[slot];
+  return (
+    <div class="meal-fields">
+      <label class="toggle">
+        <input type="checkbox" checked={meal.enabled} onChange={(e) => onChange({ ...meal, enabled: (e.target as HTMLInputElement).checked })} />
+        <span>Prévoir le {label.toLowerCase()}</span>
+      </label>
+      {meal.enabled && (
+        <div class="field-nested">
+          <fieldset>
+            <legend>{label} : comment ?</legend>
+            <div class="segmented">
+              {MEAL_MODES.map((mode) => (
+                <label key={mode}>
+                  <input
+                    type="radio"
+                    name={`${id}-mode`}
+                    checked={meal.mode === mode}
+                    onChange={() => onChange({ ...meal, mode, duration: String(MEAL_DURATION[mode]) })}
+                  />
+                  <span>{MEAL_MODE_LABEL[mode]}</span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          <div class="row">
+            <div class="field">
+              <label for={`${id}-at`}>Vers</label>
+              <input
+                id={`${id}-at`}
+                type="time"
+                value={meal.at}
+                aria-invalid={error ? 'true' : undefined}
+                aria-describedby={error ? `${id}-error` : undefined}
+                onInput={(e) => onChange({ ...meal, at: (e.target as HTMLInputElement).value })}
+              />
+              <FieldError id={`${id}-error`} text={error} />
+            </div>
+            <div class="field">
+              <label for={`${id}-duration`}>Durée</label>
+              <select id={`${id}-duration`} value={meal.duration} onChange={(e) => onChange({ ...meal, duration: (e.target as HTMLSelectElement).value })}>
+                {[...new Set([...DURATIONS, meal.duration])].sort((a, b) => Number(a) - Number(b)).map((m) => (
+                  <option key={m} value={m}>
+                    {m} min
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <p class="hint">{MEAL_HINT[meal.mode]}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const MEAL_HINT: Readonly<Record<MealMode, string>> = {
+  quick: "Comptoir, kiosque ou food truck : le plan choisit le plus proche du parcours, ou celui que vous indiquez dans Ma liste.",
+  table: 'Restaurant à table : indiquez votre réservation dans Ma liste, le plan se cale dessus.',
+  picnic: "Aire de pique-nique : à Disneyland Paris elle est hors des parcs, la sortie et le retour au contrôle sont comptés.",
+  free: 'Une pause là où vous êtes, sans détour.',
+};
 
 function FieldError({ id, text }: { id: string; text: string | null }) {
   return text ? (
@@ -68,9 +153,9 @@ function FieldError({ id, text }: { id: string; text: string | null }) {
   ) : null;
 }
 
+const mealDraft = (m: MealPref): MealDraft => ({ enabled: m.enabled, at: hhmm(m.atMin), duration: String(m.durationMin), mode: m.mode });
+
 function toDraft(p: GroupProfile): Draft {
-  const hh = String(Math.floor(p.lunch.atMin / 60)).padStart(2, '0');
-  const mm = String(p.lunch.atMin % 60).padStart(2, '0');
   return {
     size: String(p.size),
     hasChild: p.smallestHeightCm !== null,
@@ -79,9 +164,7 @@ function toDraft(p: GroupProfile): Draft {
     budget: String(p.paBudgetEur),
     pace: p.pace,
     stroller: p.stroller,
-    lunchEnabled: p.lunch.enabled,
-    lunchAt: `${hh}:${mm}`,
-    lunchDuration: String(p.lunch.durationMin),
+    meals: { lunch: mealDraft(p.lunch), dinner: mealDraft(p.dinner) },
     startPark: p.startPark,
     emhAccess: p.emhAccess,
     easyAccess: p.easyAccess,
@@ -89,7 +172,6 @@ function toDraft(p: GroupProfile): Draft {
 }
 
 function fromDraft(d: Draft): GroupProfile | null {
-  const t = /^(\d{2}):(\d{2})$/.exec(d.lunchAt);
   const toNum = (s: string) => (s.trim() === '' ? NaN : Number(s));
   return parseProfile({
     size: toNum(d.size),
@@ -98,7 +180,8 @@ function fromDraft(d: Draft): GroupProfile | null {
     paBudgetEur: toNum(d.budget),
     pace: d.pace,
     stroller: d.stroller,
-    lunch: { enabled: d.lunchEnabled, atMin: t ? Number(t[1]) * 60 + Number(t[2]) : NaN, durationMin: toNum(d.lunchDuration) },
+    lunch: { enabled: d.meals.lunch.enabled, atMin: minutesOf(d.meals.lunch.at), durationMin: toNum(d.meals.lunch.duration), mode: d.meals.lunch.mode },
+    dinner: { enabled: d.meals.dinner.enabled, atMin: minutesOf(d.meals.dinner.at), durationMin: toNum(d.meals.dinner.duration), mode: d.meals.dinner.mode },
     startPark: d.startPark,
     emhAccess: d.emhAccess,
     easyAccess: d.easyAccess,
@@ -402,38 +485,15 @@ export function ProfileScreen({ onboarding, onDone }: { onboarding: boolean; onD
             <span>Avec une poussette</span>
           </label>
 
-          <label class="toggle">
-            <input type="checkbox" checked={draft.lunchEnabled} onChange={(e) => set('lunchEnabled', (e.target as HTMLInputElement).checked)} />
-            <span>Prévoir une pause déjeuner</span>
-          </label>
-          {draft.lunchEnabled && (
-            <div class="row field-nested">
-              <div class="field">
-                <label for="lunch-at">Vers</label>
-                <input
-                  id="lunch-at"
-                  type="time"
-                  min="10:00"
-                  max="16:00"
-                  value={draft.lunchAt}
-                  aria-invalid={errorOf('lunchAt') ? 'true' : undefined}
-                  aria-describedby={errorOf('lunchAt') ? 'lunch-error' : undefined}
-                  onInput={(e) => set('lunchAt', (e.target as HTMLInputElement).value)}
-                />
-                <FieldError id="lunch-error" text={errorOf('lunchAt')} />
-              </div>
-              <div class="field">
-                <label for="lunch-duration">Durée</label>
-                <select id="lunch-duration" value={draft.lunchDuration} onChange={(e) => set('lunchDuration', (e.target as HTMLSelectElement).value)}>
-                  {['30', '45', '60', '90'].map((m) => (
-                    <option key={m} value={m}>
-                      {m} min
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-          )}
+          {(['lunch', 'dinner'] as const).map((slot) => (
+            <MealFields
+              key={slot}
+              slot={slot}
+              meal={draft.meals[slot]}
+              error={errorOf(`${slot}At`)}
+              onChange={(meal) => set('meals', { ...draft.meals, [slot]: meal })}
+            />
+          ))}
         </section>
 
         <div class="form-submit">

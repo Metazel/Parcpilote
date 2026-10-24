@@ -3,8 +3,9 @@ import type { GeoPoint, Place, Poi, PoiKind, Position } from '../../domain/types
 import type { DrawnRoute } from '../../state/store';
 import { MapView, type MapLine, type MapMarker, type MapStop } from '../components/MapView';
 import { useAppState, useStore } from '../context';
-import { PARK_SHORT, liveLabel, minutes, stepTitle, waitBand } from '../format';
+import { PARK_SHORT, POI_LABEL, SERVICE_LABEL, liveLabel, minutes, stepTitle, waitBand } from '../format';
 import { ExternalLink } from '../components/ExternalLink';
+import { DLP_DINING } from '../../data/resort';
 
 type Layer = 'rides' | 'shows' | PoiKind;
 type NearbyKind = 'ride' | PoiKind;
@@ -13,6 +14,7 @@ const LAYERS: ReadonlyArray<{ id: Layer; label: string }> = [
   { id: 'rides', label: 'Attractions' },
   { id: 'shows', label: 'Spectacles' },
   { id: 'food', label: 'Restauration' },
+  { id: 'picnic', label: 'Pique-nique' },
   { id: 'toilets', label: 'Toilettes' },
   { id: 'water', label: "Points d'eau" },
 ];
@@ -20,11 +22,19 @@ const LAYERS: ReadonlyArray<{ id: Layer; label: string }> = [
 const NEARBY: ReadonlyArray<{ id: NearbyKind; label: string }> = [
   { id: 'toilets', label: 'Toilettes' },
   { id: 'food', label: 'Restauration' },
+  { id: 'picnic', label: 'Pique-nique' },
   { id: 'ride', label: 'Attractions' },
   { id: 'water', label: "Points d'eau" },
 ];
 
-const POI_LABEL: Readonly<Record<PoiKind, string>> = { toilets: 'Toilettes', food: 'Restauration', water: "Point d'eau" };
+/** What a service point offers, in words (never colour alone). */
+function poiExtra(p: Poi): string | null {
+  const parts: string[] = [];
+  if (p.service) parts.push(SERVICE_LABEL[p.service]);
+  if (p.outside) parts.push('hors des parcs');
+  if (p.source === 'official') parts.push('liste officielle');
+  return parts.length > 0 ? parts.join(', ') : null;
+}
 
 function meters(m: number): string {
   return m < 1000 ? `${Math.round(m / 10) * 10} m` : `${(m / 1000).toFixed(1).replace('.', ',')} km`;
@@ -49,7 +59,7 @@ export function MapScreen({ report }: { report: (id: string) => void }) {
   const store = useStore();
   const state = useAppState();
   const { catalog, snapshot, plan, persisted, pois, graph, gps, gpsAccuracyM, osm } = state;
-  const [layersOn, setLayersOn] = useState<ReadonlySet<Layer>>(new Set<Layer>(['rides', 'shows', 'food', 'toilets']));
+  const [layersOn, setLayersOn] = useState<ReadonlySet<Layer>>(new Set<Layer>(['rides', 'shows', 'food', 'picnic', 'toilets']));
   const [selected, setSelected] = useState<string | null>(null);
   const [focusId, setFocusId] = useState<string | null>(null);
   const [nearKind, setNearKind] = useState<NearbyKind>('toilets');
@@ -70,7 +80,7 @@ export function MapScreen({ report }: { report: (id: string) => void }) {
     const out: Leg[] = [];
     let from: GeoPoint = here;
     for (const step of plan?.steps ?? []) {
-      if (step.kind === 'lunch' || !step.targetId) continue;
+      if (!step.targetId) continue;
       out.push({ n: out.length + 1, targetId: step.targetId, name: step.kind === 'easy-book' ? `Inscription Carte Facilité : ${step.name}` : stepTitle(step), to: step.position, walkMin: step.walkMin, route: store.route(from, step.position) });
       from = step.position;
     }
@@ -99,7 +109,9 @@ export function MapScreen({ report }: { report: (id: string) => void }) {
         out.push({ id: p.id, lat: p.lat, lon: p.lon, radius: 6, className: 'mk mk-show' });
       }
     }
-    for (const poi of pois) if (layersOn.has(poi.kind)) out.push({ id: poi.id, lat: poi.lat, lon: poi.lon, radius: 5, className: `mk mk-${poi.kind}` });
+    for (const poi of pois) {
+      if (layersOn.has(poi.kind)) out.push({ id: poi.id, lat: poi.lat, lon: poi.lon, radius: poi.service === 'table' ? 7 : 5, className: `mk mk-${poi.kind}${poi.service === 'table' ? ' mk-table' : ''}` });
+    }
     return out;
   }, [places, pois, layersOn, snapshot, persisted.wishes]);
 
@@ -119,7 +131,7 @@ export function MapScreen({ report }: { report: (id: string) => void }) {
     const candidates: Array<{ id: string; name: string; to: Position; extra: string | null }> =
       nearKind === 'ride'
         ? places.filter((p) => p.kind === 'ride').map((p) => ({ id: p.id, name: p.name, to: p, extra: liveLabel(snapshot?.attractions[p.id]) }))
-        : pois.filter((p) => p.kind === nearKind).map((p) => ({ id: p.id, name: p.name, to: p, extra: p.source === 'official' ? 'Officiel' : null }));
+        : pois.filter((p) => p.kind === nearKind).map((p) => ({ id: p.id, name: p.name, to: p, extra: poiExtra(p) }));
     return candidates
       .map((c) => ({ ...c, min: store.walkMinutesTo(c.to) }))
       .sort((a, b) => a.min - b.min)
@@ -206,7 +218,7 @@ export function MapScreen({ report }: { report: (id: string) => void }) {
           <p class="muted">
             {'kind' in sel && (sel.kind === 'ride' || sel.kind === 'show')
               ? `${sel.land}, ${PARK_SHORT[sel.park]}${sel.kind === 'ride' ? ` : ${liveLabel(snapshot?.attractions[sel.id])}` : ''}`
-              : `${POI_LABEL[(sel as Poi).kind]}, ${PARK_SHORT[(sel as Poi).park]}${(sel as Poi).source === 'official' ? ', liste officielle' : ', OpenStreetMap'}`}
+              : `${POI_LABEL[(sel as Poi).kind]}${(sel as Poi).service ? ` ${SERVICE_LABEL[(sel as Poi).service!]}` : ''}, ${PARK_SHORT[(sel as Poi).park]}${(sel as Poi).outside ? ', hors des parcs' : ''}${(sel as Poi).source === 'official' ? ', liste officielle' : (sel as Poi).source === 'osm' ? ', OpenStreetMap' : ''}`}
           </p>
           {focusId === sel.id && focusRoute && <p>À pied depuis votre position : {describe(focusRoute, focusMin)}.</p>}
           <div class="row">
@@ -223,7 +235,13 @@ export function MapScreen({ report }: { report: (id: string) => void }) {
                 Signaler
               </button>
             )}
+            {'service' in sel && sel.kind === 'food' && (
+              <ExternalLink class="btn btn-quiet btn-small" href={sel.url ?? DLP_DINING.restaurantsUrl}>
+                {sel.url ? 'Voir le menu' : 'Menus sur le site officiel'}
+              </ExternalLink>
+            )}
           </div>
+          {'service' in sel && sel.kind === 'picnic' && <p class="hint">{DLP_DINING.picnicNote}</p>}
         </section>
       )}
 

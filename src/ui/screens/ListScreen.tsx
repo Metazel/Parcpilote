@@ -4,6 +4,7 @@ import { MAX_REPEATS, heightAllowed } from '../../domain/planner';
 import { MINUTE, formatHM } from '../../domain/time';
 import type { Attraction, ParkId, Priority, Show } from '../../domain/types';
 import { useAppState, useStore } from '../context';
+import { MealPicker } from '../components/MealPicker';
 import { PARK_SHORT, liveLabel, waitBand } from '../format';
 
 type ParkFilter = 'all' | ParkId;
@@ -142,6 +143,18 @@ export function ListScreen() {
           ? 'Marquez ce que vous voulez faire. Les incontournables passent en priorité.'
           : `${persisted.wishes.length} attractions choisies, dont ${mustCount} incontournables.`}
       </p>
+      {(['lunch', 'dinner'] as const).some((m) => persisted.profile?.[m].enabled && persisted.profile[m].mode !== 'free') && (
+        <section class="land-group meals" aria-labelledby="meals-title">
+          <h2 class="land meal" id="meals-title">
+            Repas
+          </h2>
+          <div class="items items-single">
+            <MealPicker slot="lunch" />
+            <MealPicker slot="dinner" />
+          </div>
+        </section>
+      )}
+
       <div class="filters">
         <div class="segmented joined" role="radiogroup" aria-label="Parc">
           {(['all', 'dlp', 'daw'] as const).map((p) => (
