@@ -1,0 +1,218 @@
+import { afterEach, describe, expect, it } from 'vitest';
+import { DEFAULT_PROFILE, STORAGE_KEY, defaultState, loadState, saveState } from '../src/state/storage';
+import { AppStore } from '../src/state/store';
+import type { FetchFn } from '../src/data/themeparks';
+import { MINUTE, MemoryStorage, at } from './helpers';
+
+describe('storage', () => {
+  it('round-trips a valid state', () => {
+    const s = new MemoryStorage();
+    const state = { ...defaultState(at(10)), profile: DEFAULT_PROFILE, wishes: [['dlp-buzz', 'must']] as const };
+    expect(saveState(s, state)).toBe(true);
+    const back = loadState(s, at(11));
+    expect(back.profile).toEqual(DEFAULT_PROFILE);
+    expect(back.wishes).toEqual([['dlp-buzz', 'must']]);
+  });
+
+  it('falls back to defaults on corrupt or hostile content', () => {
+    const s = new MemoryStorage();
+    s.setItem(STORAGE_KEY, '{not json');
+    expect(loadState(s, at(10)).profile).toBeNull();
+    s.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        profile: { ...DEFAULT_PROFILE, size: 9999 },
+        wishes: [['<img src=x onerror=alert(1)>', 'must'], ['dlp-buzz', 'evil'], ['dlp-dumbo', 'nice']],
+        corrections: { __proto__: { ratio: 1, samples: 1 }, 'dlp-buzz': { ratio: 99, samples: 1 } },
+        day: { dateKey: '2026-10-22', done: ['ok-id', 42, '../../etc'], position: { lat: 'x' } },
+      }),
+    );
+    const back = loadState(s, at(10));
+    expect(back.profile).toBeNull();
+    expect(back.wishes).toEqual([['dlp-dumbo', 'nice']]);
+    expect(back.corrections).toEqual({});
+    expect(Object.prototype.hasOwnProperty.call({}, 'ratio')).toBe(false);
+    expect(back.day.done).toEqual(['ok-id']);
+    expect(back.day.position).toBeNull();
+  });
+
+  it('ignores oversized payloads and throwing storages', () => {
+    const s = new MemoryStorage();
+    s.setItem(STORAGE_KEY, 'x'.repeat(600_000));
+    expect(loadState(s, at(10)).version).toBe(1);
+    const broken = { getItem: () => { throw new Error('denied'); }, setItem: () => { throw new Error('full'); }, removeItem: () => undefined };
+    expect(loadState(broken, at(10)).profile).toBeNull();
+    expect(saveState(broken, defaultState(at(10)))).toBe(false);
+  });
+
+  it('resets the day’s progress on a new day but keeps preferences', () => {
+    const s = new MemoryStorage();
+    const state = defaultState(at(10));
+    saveState(s, { ...state, profile: DEFAULT_PROFILE, day: { ...state.day, done: ['dlp-buzz'] } });
+    const tomorrow = loadState(s, at(10) + 24 * 60 * MINUTE);
+    expect(tomorrow.profile).toEqual(DEFAULT_PROFILE);
+    expect(tomorrow.day.done).toEqual([]);
+  });
+});
+
+describe('AppStore (demo mode)', () => {
+  let store: AppStore | null = null;
+  afterEach(() => store?.stop());
+
+  async function demoStore(now = at(10)) {
+    const storage = new MemoryStorage();
+    let real = now;
+    store = new AppStore({ storage, fetchFn: null, realNow: () => real });
+    await store.refresh();
+    return { store, storage, advance: (min: number) => { real += min * MINUTE; store!.tick(); } };
+  }
+
+  it('falls back to demo data without network and plans the wish list', async () => {
+    const { store } = await demoStore();
+    expect(store.getState().data.mode).toBe('demo');
+    store.saveProfile({ ...DEFAULT_PROFILE, lunch: { ...DEFAULT_PROFILE.lunch, enabled: false } });
+    store.setWish('dlp-peter-pan', 'must');
+    store.setWish('dlp-buzz', 'nice');
+    store.setWish('unknown-ride', 'must');
+    const plan = store.getState().plan!;
+    expect(plan.steps.map((s) => s.targetId).sort()).toEqual(['dlp-buzz', 'dlp-peter-pan']);
+    expect(store.getState().persisted.wishes).toHaveLength(2);
+  });
+
+  it('moves the group when a step is completed and persists progress', async () => {
+    const { store, storage } = await demoStore();
+    store.saveProfile({ ...DEFAULT_PROFILE, lunch: { ...DEFAULT_PROFILE.lunch, enabled: false } });
+    store.setWish('dlp-peter-pan', 'must');
+    store.setWish('dlp-big-thunder', 'must');
+    const first = store.getState().plan!.steps[0]!;
+    store.completeStep(first);
+    const s = store.getState();
+    expect(s.persisted.day.done).toEqual([first.targetId]);
+    expect(s.plan!.steps.map((x) => x.targetId)).not.toContain(first.targetId);
+    expect(s.plan!.steps[0]!.departAt).toBe(s.now);
+    expect(loadState(storage, s.now).day.done).toEqual([first.targetId]);
+  });
+
+  it('replans on a breakdown and raises an alert', async () => {
+    const { store } = await demoStore();
+    store.saveProfile({ ...DEFAULT_PROFILE, lunch: { ...DEFAULT_PROFILE.lunch, enabled: false } });
+    for (const id of ['dlp-peter-pan', 'dlp-big-thunder', 'dlp-buzz']) store.setWish(id, 'must');
+    const first = store.getState().plan!.steps[0]!.targetId;
+    store.simulateBreakdown(first);
+    const s = store.getState();
+    expect(s.plan!.steps.map((x) => x.targetId)).not.toContain(first);
+    expect(s.alerts.some((a) => a.text.includes('en panne'))).toBe(true);
+  });
+
+  it('applies user reports (closed ride, actual wait)', async () => {
+    const { store } = await demoStore();
+    store.saveProfile({ ...DEFAULT_PROFILE, lunch: { ...DEFAULT_PROFILE.lunch, enabled: false } });
+    store.setWish('dlp-peter-pan', 'must');
+    store.reportClosed('dlp-peter-pan');
+    expect(store.getState().plan!.unplanned).toContainEqual({ id: 'dlp-peter-pan', reason: 'closed' });
+    expect(store.reportWait('dlp-big-thunder', 5)).toBe(true);
+    expect(store.reportWait('dlp-big-thunder', -3)).toBe(false);
+    expect(store.reportWait('dlp-big-thunder', 1.5)).toBe(false);
+    expect(store.getState().persisted.corrections['dlp-big-thunder']?.samples).toBe(1);
+  });
+
+  it('records a Premier Access purchase within budget only', async () => {
+    const { store } = await demoStore();
+    store.saveProfile({ ...DEFAULT_PROFILE, paBudgetEur: 15, lunch: { ...DEFAULT_PROFILE.lunch, enabled: false } });
+    store.setWish('dlp-big-thunder', 'must');
+    expect(store.bookPremierAccess('dlp-big-thunder', at(11), 2000)).toBe(false);
+    expect(store.bookPremierAccess('dlp-big-thunder', at(11), 1400)).toBe(true);
+    const step = store.getState().plan!.steps.find((s) => s.targetId === 'dlp-big-thunder');
+    expect(step?.kind).toBe('pa');
+  });
+
+  it('only accepts real sessions when picking a show', async () => {
+    const { store } = await demoStore();
+    store.saveProfile({ ...DEFAULT_PROFILE, lunch: { ...DEFAULT_PROFILE.lunch, enabled: false } });
+    store.pickShow('daw-show-arendelle', at(10, 7));
+    expect(store.getState().persisted.day.shows).toEqual([]);
+    const session = store.getState().snapshot!.showtimes['daw-show-arendelle']![2]!;
+    store.pickShow('daw-show-arendelle', session);
+    expect(store.getState().plan!.steps.some((s) => s.kind === 'show')).toBe(true);
+  });
+
+  it('advances the simulated clock', async () => {
+    const { store, advance } = await demoStore();
+    store.setDemoSpeed(60);
+    const t0 = store.getState().now;
+    advance(1);
+    expect(store.getState().now - t0).toBeGreaterThanOrEqual(59 * MINUTE);
+  });
+});
+
+describe('AppStore (live mode)', () => {
+  it('uses the last live snapshot when the network drops', async () => {
+    const storage = new MemoryStorage();
+    let online = true;
+    const fetchFn: FetchFn = async (url) => {
+      if (!online) throw new TypeError('offline');
+      const path = url.replace('https://api.themeparks.wiki/v1', '');
+      const routes: Record<string, unknown> = {
+        '/destinations': { destinations: [{ name: 'Disneyland Paris', slug: 'disneylandparis', parks: [{ id: 'p1', name: 'Disneyland Park' }] }] },
+        '/entity/p1/children': { children: [{ id: 'pp', name: "Peter Pan's Flight", entityType: 'ATTRACTION' }] },
+        '/entity/p1/live': { liveData: [{ id: 'pp', name: "Peter Pan's Flight", entityType: 'ATTRACTION', status: 'OPERATING', queue: { STANDBY: { waitTime: 55 } } }] },
+        '/entity/p1/schedule': { schedule: [] },
+      };
+      return { ok: path in routes, status: path in routes ? 200 : 404, json: async () => routes[path] };
+    };
+    let real = at(10);
+    const store = new AppStore({ storage, fetchFn, realNow: () => real });
+    await store.refresh();
+    expect(store.getState().data.mode).toBe('live');
+    expect(store.getState().snapshot?.attractions['dlp-peter-pan']?.standby).toBe(55);
+
+    online = false;
+    real += 10 * MINUTE;
+    const reloaded = new AppStore({ storage, fetchFn, realNow: () => real });
+    await reloaded.refresh();
+    expect(reloaded.getState().data.mode).toBe('offline');
+    expect(reloaded.getState().snapshot?.attractions['dlp-peter-pan']?.standby).toBe(55);
+  });
+});
+
+describe('AppStore (OpenStreetMap)', () => {
+  it('fetches the footway network once, caches it and plans with it', async () => {
+    const { overpassGrid } = await import('./fixtures');
+    const { OSM_CACHE_KEY } = await import('../src/data/osm');
+    const storage = new MemoryStorage();
+    let overpassCalls = 0;
+    const fetchFn: FetchFn = async (url) => {
+      if (url.startsWith('https://overpass-api.de/')) {
+        overpassCalls++;
+        return { ok: true, status: 200, json: async () => overpassGrid() };
+      }
+      throw new TypeError('offline');
+    };
+    const real = at(10);
+    const store = new AppStore({ storage, fetchFn, realNow: () => real });
+    await store.refresh();
+    await store.loadOsm();
+    expect(store.getState().osm.status).toBe('ok');
+    expect(store.getState().pois.some((p) => p.kind === 'toilets')).toBe(true);
+    expect(storage.getItem(OSM_CACHE_KEY)).not.toBeNull();
+    store.saveProfile({ ...DEFAULT_PROFILE, lunch: { ...DEFAULT_PROFILE.lunch, enabled: false } });
+    store.setWish('dlp-big-thunder', 'must');
+    const step = store.getState().plan!.steps[0]!;
+    expect(step.walkMin).toBe(store.walkMinutesTo(step.position));
+    expect(store.route(store.currentPosition(), step.position).onNetwork).toBe(true);
+
+    // Second start: served from the device cache, no network call.
+    const again = new AppStore({ storage, fetchFn, realNow: () => real });
+    await again.loadOsm();
+    expect(again.getState().osm.status).toBe('ok');
+    expect(overpassCalls).toBe(1);
+  });
+
+  it('degrades to straight-line estimates without network data', async () => {
+    const store = new AppStore({ storage: new MemoryStorage(), fetchFn: null, realNow: () => at(10) });
+    await store.loadOsm();
+    expect(store.getState().osm.status).toBe('unavailable');
+    expect(store.route({ lat: 48.87, lon: 2.77 }, { lat: 48.872, lon: 2.772 }).onNetwork).toBe(false);
+  });
+});

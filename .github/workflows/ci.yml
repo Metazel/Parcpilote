@@ -1,0 +1,138 @@
+# ParcPilote — vérification, recette et publication sur GitHub Pages.
+#
+#   verify  : types, lint, 77 tests unitaires, audit npm
+#   build   : PWA (dist/) et fichier unique (dist-single/) ; prépare l'artefact Pages sur main
+#   e2e     : 24 scénarios Playwright, captures en artefact
+#   deploy  : publication GitHub Pages (push ou lancement manuel sur main uniquement)
+#
+# Variable de dépôt utile (Settings > Secrets and variables > Actions > Variables) :
+#   SKIP_E2E = true   saute la recette navigateur (dépannage uniquement)
+#
+# Sécurité : actions épinglées par empreinte (SHA) avec la version en commentaire,
+# permissions minimales par job, aucun secret requis.
+
+name: CI et publication
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # Chaque lundi vers 7 h (heure de Paris) : rejoue l'audit des dépendances, sans publier.
+    - cron: "17 5 * * 1"
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  verify:
+    name: Vérifier
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm audit --audit-level=high
+
+  build:
+    name: Construire
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Pas de cache ici : ce job produit ce qui est publié.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build
+      - run: npm run build:single
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: builds
+          path: |
+            dist/
+            dist-single/
+            node_modules/axe-core/axe.min.js
+          retention-days: 7
+          if-no-files-found: error
+      - name: Préparer l'artefact GitHub Pages
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: dist
+
+  e2e:
+    name: Recette navigateur
+    needs: build
+    if: vars.SKIP_E2E != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: builds
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: e2e/requirements.txt
+      - run: python -m pip install -r e2e/requirements.txt
+      - run: python -m playwright install --with-deps chromium
+      - run: python e2e/run_e2e.py --shots e2e-shots
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: e2e-captures
+          path: e2e-shots/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  deploy:
+    name: Publier
+    needs: [build, e2e]
+    if: >-
+      !cancelled()
+      && needs.build.result == 'success'
+      && (needs.e2e.result == 'success' || needs.e2e.result == 'skipped')
+      && github.ref == 'refs/heads/main'
+      && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      pages: write # publier le site sur GitHub Pages
+      id-token: write # prouver l'origine du déploiement (jeton OIDC exigé par deploy-pages)
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

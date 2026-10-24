@@ -1,0 +1,20 @@
+# Dependencies and caches
+node_modules/
+.npm/
+__pycache__/
+
+# Build outputs
+dist/
+dist-single/
+dist-artifact/
+
+# Test outputs
+e2e-shots/
+
+# Local files
+.env
+.env.*
+*.log
+.DS_Store
+.vscode/
+.idea/
