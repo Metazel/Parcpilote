@@ -1,5 +1,6 @@
 import { parkDateKey } from '../domain/time';
 import type {
+  EasyAccessReservation,
   GroupProfile,
   LiveAttraction,
   LiveSnapshot,
@@ -13,6 +14,7 @@ import type {
   WaitCorrection,
 } from '../domain/types';
 import { arr, bool, int, isRecord, num, oneOf, safeId } from '../data/validate';
+import { MAX_REPEATS } from '../domain/planner';
 
 /**
  * Persistence on the device only (localStorage). Everything read back is treated as
@@ -40,6 +42,8 @@ export interface DayProgress {
   readonly closedReports: Readonly<Record<string, number>>;
   /** Demo only: ride id → epoch until which a breakdown is simulated. */
   readonly forcedDown: Readonly<Record<string, number>>;
+  /** Carte Facilité registration currently held. */
+  readonly easyAccess: EasyAccessReservation | null;
 }
 
 export interface DemoClock {
@@ -59,6 +63,8 @@ export interface PersistedState {
   readonly version: 1;
   readonly profile: GroupProfile | null;
   readonly wishes: ReadonlyArray<readonly [string, Priority]>;
+  /** Ride id → rides wanted today, only when more than one. */
+  readonly repeats: Readonly<Record<string, number>>;
   readonly corrections: Readonly<Record<string, WaitCorrection>>;
   readonly day: DayProgress;
   readonly settings: Settings;
@@ -75,10 +81,11 @@ export const DEFAULT_PROFILE: GroupProfile = {
   lunch: { enabled: true, atMin: 12 * 60 + 30, durationMin: 45 },
   startPark: 'dlp',
   emhAccess: false,
+  easyAccess: false,
 };
 
 export function emptyDay(now: number): DayProgress {
-  return { dateKey: parkDateKey(now), done: [], skipped: [], lunchDone: false, position: null, shows: [], paBookings: [], closedReports: {}, forcedDown: {} };
+  return { dateKey: parkDateKey(now), done: [], skipped: [], lunchDone: false, position: null, shows: [], paBookings: [], closedReports: {}, forcedDown: {}, easyAccess: null };
 }
 
 export function defaultState(now: number): PersistedState {
@@ -86,6 +93,7 @@ export function defaultState(now: number): PersistedState {
     version: 1,
     profile: null,
     wishes: [],
+    repeats: {},
     corrections: {},
     day: emptyDay(now),
     settings: { source: 'auto', demoClock: null, useGps: false },
@@ -112,10 +120,12 @@ export function parseProfile(v: unknown): GroupProfile | null {
   const startPark = oneOf(v.startPark, PARKS);
   // Absent in profiles saved by v0.1: defaults to no access.
   const emhAccess = v.emhAccess === undefined ? false : bool(v.emhAccess);
-  if (emhAccess === null) return null;
+  // Absent before v0.3: no Carte Facilité.
+  const easyAccess = v.easyAccess === undefined ? false : bool(v.easyAccess);
+  if (emhAccess === null || easyAccess === null) return null;
   if (size === null || (v.smallestHeightCm !== null && smallest === null) || singleRiderOk === null || paBudgetEur === null) return null;
   if (!pace || stroller === null || lunchEnabled === null || atMin === null || durationMin === null || !startPark) return null;
-  return { size, smallestHeightCm: smallest, singleRiderOk, paBudgetEur, pace, stroller, lunch: { enabled: lunchEnabled, atMin, durationMin }, startPark, emhAccess };
+  return { size, smallestHeightCm: smallest, singleRiderOk, paBudgetEur, pace, stroller, lunch: { enabled: lunchEnabled, atMin, durationMin }, startPark, emhAccess, easyAccess };
 }
 
 function parseIdList(v: unknown, max = 300): string[] {
@@ -125,6 +135,34 @@ function parseIdList(v: unknown, max = 300): string[] {
     if (id && !out.includes(id)) out.push(id);
   }
   return out;
+}
+
+/** Ids in order, repeats kept (a ride done twice appears twice). */
+function parseIdSequence(v: unknown, max = 300): string[] {
+  const out: string[] = [];
+  for (const x of arr(v, max) ?? []) {
+    const id = safeId(x);
+    if (id) out.push(id);
+  }
+  return out;
+}
+
+function parseRepeats(v: unknown): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (!isRecord(v)) return out;
+  for (const [k, val] of Object.entries(v).slice(0, 300)) {
+    const id = safeId(k);
+    const n = int(val, 2, MAX_REPEATS);
+    if (id && n !== null) out[id] = n;
+  }
+  return out;
+}
+
+function parseEasyAccess(v: unknown): EasyAccessReservation | null {
+  if (!isRecord(v)) return null;
+  const rideId = safeId(v.rideId);
+  const returnAt = epoch(v.returnAt);
+  return rideId && returnAt !== null ? { rideId, returnAt } : null;
 }
 
 function parseEpochMap(v: unknown): Record<string, number> {
@@ -165,12 +203,12 @@ function parseDay(v: unknown, now: number): DayProgress {
     const returnEnd = epoch(b.returnEnd);
     const priceCents = int(b.priceCents, 0, 100_000);
     if (attractionId && returnStart !== null && returnEnd !== null && returnEnd > returnStart && priceCents !== null) {
-      paBookings.push({ attractionId, returnStart, returnEnd, priceCents });
+      paBookings.push(b.used === true ? { attractionId, returnStart, returnEnd, priceCents, used: true } : { attractionId, returnStart, returnEnd, priceCents });
     }
   }
   return {
     dateKey: today,
-    done: parseIdList(v.done),
+    done: parseIdSequence(v.done),
     skipped: parseIdList(v.skipped),
     lunchDone: bool(v.lunchDone) ?? false,
     position: parsePosition(v.position),
@@ -178,6 +216,7 @@ function parseDay(v: unknown, now: number): DayProgress {
     paBookings,
     closedReports: parseEpochMap(v.closedReports),
     forcedDown: parseEpochMap(v.forcedDown),
+    easyAccess: parseEasyAccess(v.easyAccess),
   };
 }
 
@@ -287,6 +326,7 @@ export function loadState(storage: StorageLike, now: number): PersistedState {
     version: 1,
     profile: parseProfile(json.profile),
     wishes,
+    repeats: parseRepeats(json.repeats),
     corrections: parseCorrections(json.corrections),
     day: parseDay(json.day, now),
     settings: parseSettings(json.settings),

@@ -216,3 +216,100 @@ describe('AppStore (OpenStreetMap)', () => {
     expect(store.route({ lat: 48.87, lon: 2.77 }, { lat: 48.872, lon: 2.772 }).onNetwork).toBe(false);
   });
 });
+
+describe('Carte Facilité, repeated rides and split group: persistence and store', () => {
+  let store: AppStore | null = null;
+  afterEach(() => store?.stop());
+
+  async function demoStore(now = at(10)) {
+    const storage = new MemoryStorage();
+    store = new AppStore({ storage, fetchFn: null, realNow: () => now });
+    await store.refresh();
+    return { store, storage };
+  }
+
+  it('round-trips repeats, repeated rides, the held registration and used Premier Access', () => {
+    const s = new MemoryStorage();
+    const state = defaultState(at(10));
+    const day = {
+      ...state.day,
+      done: ['dlp-buzz', 'dlp-buzz'],
+      easyAccess: { rideId: 'dlp-peter-pan', returnAt: at(10, 45) },
+      paBookings: [{ attractionId: 'dlp-buzz', returnStart: at(11), returnEnd: at(12), priceCents: 1000, used: true }],
+    };
+    saveState(s, { ...state, profile: { ...DEFAULT_PROFILE, size: 7, easyAccess: true }, repeats: { 'dlp-buzz': 3 }, day });
+    const back = loadState(s, at(11));
+    expect(back.profile?.easyAccess).toBe(true);
+    expect(back.repeats).toEqual({ 'dlp-buzz': 3 });
+    expect(back.day.done).toEqual(['dlp-buzz', 'dlp-buzz']);
+    expect(back.day.easyAccess).toEqual({ rideId: 'dlp-peter-pan', returnAt: at(10, 45) });
+    expect(back.day.paBookings[0]?.used).toBe(true);
+  });
+
+  it('rejects hostile or out-of-range values and reads older profiles', () => {
+    const s = new MemoryStorage();
+    s.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        profile: { ...DEFAULT_PROFILE, easyAccess: undefined },
+        repeats: { 'dlp-buzz': 99, '<img>': 2, 'dlp-orbitron': 1.5, 'dlp-dumbo': 2 },
+        day: { dateKey: '2026-10-22', easyAccess: { rideId: '../etc', returnAt: 'soon' } },
+      }),
+    );
+    const back = loadState(s, at(10));
+    expect(back.profile?.easyAccess).toBe(false);
+    expect(back.repeats).toEqual({ 'dlp-dumbo': 2 });
+    expect(back.day.easyAccess).toBeNull();
+    s.setItem(STORAGE_KEY, JSON.stringify({ version: 1, profile: { ...DEFAULT_PROFILE, easyAccess: 'yes' } }));
+    expect(loadState(s, at(10)).profile).toBeNull();
+  });
+
+  it('records the return time given, plans the ride through the card, and frees it once ridden', async () => {
+    const { store } = await demoStore();
+    store.saveProfile({ ...DEFAULT_PROFILE, easyAccess: true, lunch: { ...DEFAULT_PROFILE.lunch, enabled: false } });
+    for (const id of ['dlp-peter-pan', 'dlp-dumbo', 'dlp-lancelot']) store.setWish(id, 'must');
+    const now = store.getState().now;
+    expect(store.registerEasyAccess('dlp-peter-pan', now + 9 * 60 * MINUTE)).toBe(false);
+    expect(store.registerEasyAccess('dlp-peter-pan', now + 35 * MINUTE)).toBe(true);
+    let plan = store.getState().plan!;
+    expect(plan.steps.some((s) => s.kind === 'easy-book')).toBe(false);
+    const pp = plan.steps.find((s) => s.targetId === 'dlp-peter-pan')!;
+    expect(pp.queue).toBe('easy');
+    expect(pp.startAt).toBeGreaterThanOrEqual(now + 35 * MINUTE);
+    store.completeStep(pp);
+    expect(store.getState().persisted.day.easyAccess).toBeNull();
+    plan = store.getState().plan!;
+    expect(plan.steps.some((s) => s.targetId === 'dlp-peter-pan')).toBe(false);
+  });
+
+  it('refuses a registration without the card, and drops it when the ride is skipped', async () => {
+    const { store } = await demoStore();
+    store.saveProfile({ ...DEFAULT_PROFILE, lunch: { ...DEFAULT_PROFILE.lunch, enabled: false } });
+    store.setWish('dlp-peter-pan', 'must');
+    const now = store.getState().now;
+    expect(store.registerEasyAccess('dlp-peter-pan', now + 30 * MINUTE)).toBe(false);
+    store.saveProfile({ ...DEFAULT_PROFILE, easyAccess: true, lunch: { ...DEFAULT_PROFILE.lunch, enabled: false } });
+    expect(store.registerEasyAccess('dlp-peter-pan', now + 30 * MINUTE)).toBe(true);
+    store.skip('dlp-peter-pan');
+    expect(store.getState().persisted.day.easyAccess).toBeNull();
+  });
+
+  it('plans a ride again until it has been done as many times as wished', async () => {
+    const { store } = await demoStore();
+    store.saveProfile({ ...DEFAULT_PROFILE, lunch: { ...DEFAULT_PROFILE.lunch, enabled: false } });
+    store.setWish('dlp-buzz', 'must');
+    store.setRepeat('dlp-buzz', 2);
+    store.setRepeat('dlp-buzz', 99);
+    expect(store.getState().persisted.repeats).toEqual({ 'dlp-buzz': 2 });
+    const buzz = () => store.getState().plan!.steps.filter((s) => s.targetId === 'dlp-buzz');
+    expect(buzz().map((s) => s.rep)).toEqual([1, 2]);
+    store.completeStep(buzz()[0]!);
+    expect(buzz().map((s) => s.rep)).toEqual([2]);
+    store.completeStep(buzz()[0]!);
+    expect(buzz()).toEqual([]);
+    expect(store.getState().persisted.day.done).toEqual(['dlp-buzz', 'dlp-buzz']);
+    store.setWish('dlp-buzz', null);
+    expect(store.getState().persisted.repeats).toEqual({});
+  });
+});

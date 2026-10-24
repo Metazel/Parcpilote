@@ -1,6 +1,6 @@
 import { useState } from 'preact/hooks';
 import { formatHM, parkWallTime } from '../../domain/time';
-import type { GroupProfile, Pace, ParkId } from '../../domain/types';
+import { EASY_ACCESS_MAX_PARTY, type GroupProfile, type Pace, type ParkId } from '../../domain/types';
 import { DEFAULT_PROFILE, parseProfile } from '../../state/storage';
 import { useAppState, useStore } from '../context';
 import { PARK_SHORT } from '../format';
@@ -24,6 +24,18 @@ interface Draft {
   lunchDuration: string;
   startPark: ParkId;
   emhAccess: boolean;
+  easyAccess: boolean;
+}
+
+/** Members beyond the Carte Facilité party (holder + 4), who ride on their own. */
+function othersOf(d: Draft): number {
+  const size = Number(d.size);
+  return d.easyAccess && Number.isInteger(size) ? Math.max(0, size - EASY_ACCESS_MAX_PARTY) : 0;
+}
+
+/** Single Rider is offered to the whole group without child, or to the members outside the card party. */
+function singleRiderOffered(d: Draft): boolean {
+  return !d.hasChild || othersOf(d) > 0;
 }
 
 function toDraft(p: GroupProfile): Draft {
@@ -42,6 +54,7 @@ function toDraft(p: GroupProfile): Draft {
     lunchDuration: String(p.lunch.durationMin),
     startPark: p.startPark,
     emhAccess: p.emhAccess,
+    easyAccess: p.easyAccess,
   };
 }
 
@@ -51,13 +64,14 @@ function fromDraft(d: Draft): GroupProfile | null {
   return parseProfile({
     size: toNum(d.size),
     smallestHeightCm: d.hasChild ? toNum(d.height) : null,
-    singleRiderOk: d.hasChild ? false : d.singleRiderOk,
+    singleRiderOk: singleRiderOffered(d) ? d.singleRiderOk : false,
     paBudgetEur: toNum(d.budget),
     pace: d.pace,
     stroller: d.stroller,
     lunch: { enabled: d.lunchEnabled, atMin: t ? Number(t[1]) * 60 + Number(t[2]) : NaN, durationMin: toNum(d.lunchDuration) },
     startPark: d.startPark,
     emhAccess: d.emhAccess,
+    easyAccess: d.easyAccess,
   });
 }
 
@@ -204,15 +218,32 @@ export function ProfileScreen({ onboarding, onDone }: { onboarding: boolean; onD
         )}
 
         <label class="toggle">
+          <input type="checkbox" checked={draft.easyAccess} onChange={(e) => set('easyAccess', (e.target as HTMLInputElement).checked)} />
+          <span>Une personne a la Carte Facilité (ALD)</span>
+        </label>
+        {draft.easyAccess && (
+          <p class="hint">
+            Le titulaire s'inscrit à l'entrée Premier Access d'une attraction et reçoit une heure de retour égale à l'attente ; une seule inscription à la fois. Le plan
+            occupe ce délai avec d'autres attractions en file normale. Le titulaire passe avec 4 accompagnateurs au plus, enfants compris.
+            {othersOf(draft) > 0 &&
+              ` Les ${othersOf(draft)} autres personnes font chaque attraction de leur côté et vous retrouvent à la sortie.`}
+          </p>
+        )}
+
+        <label class="toggle">
           <input
             type="checkbox"
-            checked={draft.singleRiderOk && !draft.hasChild}
-            disabled={draft.hasChild}
+            checked={draft.singleRiderOk && singleRiderOffered(draft)}
+            disabled={!singleRiderOffered(draft)}
             onChange={(e) => set('singleRiderOk', (e.target as HTMLInputElement).checked)}
           />
-          <span>Accepter d'être séparés (file Single Rider)</span>
+          <span>
+            {draft.hasChild && othersOf(draft) > 0
+              ? `Les ${othersOf(draft)} personnes hors carte acceptent la file Single Rider`
+              : "Accepter d'être séparés (file Single Rider)"}
+          </span>
         </label>
-        {draft.hasChild && <p class="hint">Jamais proposé quand un enfant est dans le groupe.</p>}
+        {!singleRiderOffered(draft) && <p class="hint">Jamais proposé quand un enfant est dans le groupe, sauf pour les personnes hors Carte Facilité.</p>}
 
         <div class="field">
           <label for="budget">Budget Premier Access par personne (€)</label>

@@ -1,5 +1,5 @@
 import { MINUTE, formatHM } from '../domain/time';
-import type { LiveAttraction, ParkId, QueueKind, StepKind, UnplannedReason } from '../domain/types';
+import type { LiveAttraction, ParkId, PlanStep, QueueKind, StepKind, UnplannedReason } from '../domain/types';
 
 export const PARK_SHORT: Readonly<Record<ParkId, string>> = { dlp: 'Disneyland Park', daw: 'Adventure World' };
 
@@ -8,12 +8,14 @@ export const STEP_LABEL: Readonly<Record<StepKind, string>> = {
   show: 'Spectacle',
   pa: 'Premier Access',
   lunch: 'Pause',
+  'easy-book': 'Inscription Carte Facilité',
 };
 
 export const QUEUE_LABEL: Readonly<Record<QueueKind, string>> = {
   standby: 'file standard',
   single: 'file Single Rider',
   premier: 'file Premier Access',
+  easy: 'entrée Premier Access avec la Carte Facilité',
 };
 
 export const REASON_LABEL: Readonly<Record<UnplannedReason, string>> = {
@@ -21,7 +23,19 @@ export const REASON_LABEL: Readonly<Record<UnplannedReason, string>> = {
   height: 'Taille minimale non atteinte',
   time: 'Plus assez de temps',
   done: 'Déjà faite',
+  repeat: 'Pas le temps de la refaire autant de fois',
 };
+
+/** "2e fois" label for repeated rides; empty for a first ride. */
+export function repLabel(rep: number): string {
+  return rep >= 2 ? `${rep}e fois` : '';
+}
+
+/** Title of a step, with "2e fois" for repeated rides. */
+export function stepTitle(step: PlanStep): string {
+  const rep = repLabel(step.rep);
+  return rep ? `${step.name} (${rep})` : step.name;
+}
 
 export function minutes(n: number): string {
   return `${n} min`;

@@ -71,6 +71,8 @@ export function advisePremierAccess(input: PaAdviceInput): PaAdvice | null {
     if (windowBlockedByShows(pa.returnStart, pa.returnEnd, input)) continue;
 
     const planned = input.plan?.steps.find((s) => s.kind === 'ride' && s.targetId === id);
+    // Already covered by the Carte Facilité: paying would save nothing.
+    if (planned?.queue === 'easy') continue;
     const standby =
       planned && planned.queue === 'standby'
         ? planned.waitMin
