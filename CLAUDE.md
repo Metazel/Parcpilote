@@ -78,8 +78,9 @@ Depuis l'environnement Claude, api.themeparks.wiki, Overpass et Nominatim sont i
 
 ## Suivi au 05/11/2026
 
-- PR #10 (Dependabot, playwright 1.63 → 1.64, mineure) : la tâche du lundi la traitera.
+- 0.7.0 publiée le 05/11 (PR #10 et #12 fusionnées).
+- Alerte modérée minimatch (outillage eslint, hors application publiée) : décision du propriétaire le 05/11, **attendre le correctif amont**. La mise à jour de sécurité Dependabot échoue tant qu'eslint exige minimatch 10 ; dès qu'une version compatible sort, la PR Dependabot relève de l'option A. Ne pas forcer la version par `overrides`.
 - Puy du Fou : **pas d'autorisation** de reprendre le programme (réponse du propriétaire le 05/11). La tâche quotidienne de reprise est abandonnée. Alternative livrée en 0.7.0 : lien vers le programme officiel et import du texte copié par le visiteur depuis une photo (analyse sur le téléphone, rien de republié).
 - Phase 2 possible, avec accord (nouvelle dépendance) : OCR intégré (Tesseract.js auto-hébergé) si l'essai en parc montre que le copier-coller du téléphone gêne.
 - Piste non prioritaire : Queue-Times comme source de secours. Elle impose un relais en ligne, car ce service n'autorise pas l'appel direct depuis le navigateur.
-- À faire : un essai réel dans un parc autre que Disneyland Paris, car les flux n'ont été testés qu'en simulation.
+- À faire : un essai réel dans un parc autre que Disneyland Paris, car les flux n'ont été testés qu'en simulation. Prévu au Parc Spirou (ouvert les 7, 8 et 11/11, puis fermé jusqu'en avril) avec la fiche « 3_Recette_terrain_ParcPilote.md » du projet Claude. Les retours alimentent les tests de `programme.test.ts` avec des textes réécrits (ne jamais committer le texte d'un programme officiel : risque juridique).
