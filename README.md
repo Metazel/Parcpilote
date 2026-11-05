@@ -1,12 +1,12 @@
 # ParcPilote
 
-Assistant de visite de parcs d'attractions : à tout moment, la meilleure prochaine étape pour le groupe, en tenant compte des temps d'attente en direct, de la marche, des spectacles choisis, des repas, du Single Rider, du Premier Access et de la Carte Facilité. Version 0.6.0.
+Assistant de visite de parcs d'attractions : à tout moment, la meilleure prochaine étape pour le groupe, en tenant compte des temps d'attente en direct, de la marche, des spectacles choisis, des repas, du Single Rider, du Premier Access et de la Carte Facilité. Version 0.7.0.
 
 | Parc | Données |
 | --- | --- |
 | Disneyland Paris (2 parcs, référentiel détaillé, démo, Heures de Magie en Plus, Carte Facilité) | En direct |
 | Parc Astérix, Europa-Park, Futuroscope, Nigloland, Walibi Rhône-Alpes, Walibi Belgium, Walibi Holland, Gardaland, Mirabilandia, PortAventura World | En direct (liste, positions, attentes, séances et horaires lus dans le flux) |
-| Puy du Fou, Parc Spirou Provence | Mode estimé : pas de flux public ; spectacles et attractions issus d'OpenStreetMap ou ajoutés par vous, attentes estimées à corriger sur place, séances et horaires saisis depuis le programme du jour |
+| Puy du Fou, Parc Spirou Provence | Mode estimé : pas de flux public ; spectacles et attractions issus d'OpenStreetMap ou ajoutés par vous, attentes estimées à corriger sur place, séances, horaires, attentes et fermetures saisis ou importés depuis le programme du jour (texte copié d'une photo) |
 
 ## Ce que fait l'application
 
@@ -24,6 +24,8 @@ Assistant de visite de parcs d'attractions : à tout moment, la meilleure procha
 - **Premier Access** : conseil chiffré (minutes gagnées, prix), puis saisie du créneau acheté qui devient une étape du plan.
 - **Plusieurs parcs** : choix du parc dans Groupe (dès le premier écran) ; changer de parc recommence la journée et garde la liste de chaque parc. Pour les parcs autres que Disneyland Paris, la structure (parcs, positions des entrées) est déduite du flux en direct et la dernière liste reçue est gardée 30 jours pour les journées sans réseau. Si le flux tombe : dernières données du jour, puis mode estimé.
 - **Mode estimé** : « Ajouter une attraction ou un spectacle » (nom, type, durée), saisie des séances lues sur le programme, horaires du jour modifiables ; le plan les prend en compte comme des données en direct.
+- **Importer le programme du jour** (mode estimé) : photographiez le programme ou un panneau, copiez le texte reconnu par le téléphone (Texte en direct sur iPhone, Google Lens sur Android) et collez-le. L'application reconnaît sur l'appareil les horaires du parc, les séances par spectacle, les attentes affichées et les attractions fermées, les rattache aux lieux connus, puis vous montre un aperçu à cocher avant de l'ajouter à la journée. Les spectacles inconnus ne sont ajoutés que si vous les cochez. Le texte n'est ni envoyé ni conservé.
+- **Liens officiels** : site de chaque parc dans Ma liste et dans Groupe ; programme officiel (Puy du Fou) ou calendrier (Parc Spirou) dans le bloc d'import.
 - **Mode démo** déterministe (Disneyland Paris) : journée simulée, horloge accélérée, pannes déclenchables. Il sert aussi à préparer sa visite la veille.
 
 ## Habillage et accessibilité
@@ -73,6 +75,7 @@ e2e/        recette navigateur (Playwright)
 - CSP stricte dans la PWA : `script-src 'self'`, `connect-src` limité à `api.themeparks.wiki` et `overpass-api.de`, images limitées à `tile.openstreetmap.org`, pas de `unsafe-inline`.
 - Aucun HTML injecté : rendu Preact échappé ; `innerHTML` et `dangerouslySetInnerHTML` interdits par le lint.
 - Toutes les données externes (API) et stockées (localStorage) sont validées champ par champ ; identifiants restreints à un jeu de caractères sûr, tailles bornées.
+- Texte de programme collé : 5 000 caractères au plus, caractères de contrôle et de direction retirés, libellés réduits à du texte simple (80 caractères), heures et attentes bornées, chaque valeur revérifiée par le store avant enregistrement.
 - Requêtes anonymes : sans cookies, sans référent, sans cache HTTP.
 - Géolocalisation optionnelle, traitée uniquement sur l'appareil ; signalements locaux. Le serveur de tuiles voit la zone de carte affichée (inhérent à toute carte en ligne), jamais la position GPS.
 - Données OpenStreetMap validées comme le reste (bornes géographiques, tailles, index) avant d'être utilisées ou relues depuis le cache.
@@ -86,9 +89,9 @@ Le workflow `.github/workflows/ci.yml` vérifie, construit, teste puis publie l'
 
 | Job | Contenu |
 | --- | --- |
-| `verify` | types, lint, 124 tests unitaires, `npm audit` |
+| `verify` | types, lint, 135 tests unitaires, `npm audit` |
 | `build` | PWA (`dist/`) et fichier unique (`dist-single/`) ; artefact Pages sur `main` |
-| `e2e` | 49 scénarios Playwright (dont accessibilité RGAA), captures en artefact ; une suite en échec est rejouée une fois, les instabilités sont signalées en annotation |
+| `e2e` | 50 scénarios Playwright (dont accessibilité RGAA), captures en artefact ; une suite en échec est rejouée une fois, les instabilités sont signalées en annotation |
 | `deploy` | publication GitHub Pages (push ou lancement manuel sur `main`) |
 
 Les pull requests passent les trois premiers jobs sans publier. Un passage hebdomadaire rejoue l'audit. Les actions sont épinglées par empreinte SHA, les permissions limitées par job ; le workflow est contrôlé par `actionlint` et `zizmor`. Dependabot (`.github/dependabot.yml`) propose chaque semaine les mises à jour npm, pip et GitHub Actions, avec un délai de 14 jours.
@@ -102,7 +105,8 @@ Dépôt : [Metazel/Parcpilote](https://github.com/Metazel/Parcpilote), avec **Se
 ## Limites connues
 
 - Hors Disneyland Paris, tailles minimales et durées ne sont pas publiées par les flux : le filtrage par taille ne s'applique pas, la durée d'une attraction est estimée à 5 min. Les aires de pique-nique viennent d'OpenStreetMap ; celles à plus de 250 m des attractions sont supposées hors du parc (retour compté). Vérifiez le règlement du parc.
-- Puy du Fou et Parc Spirou : aucune source publique de temps d'attente ni de programme ; tout ce qui est estimé est indiqué comme tel.
+- Puy du Fou et Parc Spirou : aucune source publique de temps d'attente ni de programme, et pas d'autorisation de reprise du programme du Puy du Fou ; l'import repose sur le texte que le visiteur copie lui-même. Tout ce qui est estimé est indiqué comme tel.
+- Import du programme : la reconnaissance du texte d'une photo dépend du téléphone ; l'analyse tolère une faute de lecture par mot mais peut se tromper sur un programme très mis en page, d'où l'aperçu à vérifier. Une fermeture importée compte 30 min, comme un signalement.
 - Tailles minimales, durées, positions et options de file du référentiel sont **indicatives** ; l'API remplace positions, statuts et files en mode direct.
 - Les prix Premier Access de l'API sont lus en centimes ; le créneau acheté est supposé durer 60 min.
 - Les attractions ouvertes pendant les Heures de Magie en Plus sont celles que le flux officiel indique ouvertes ; la démo simule Fantasyland et Discoveryland.

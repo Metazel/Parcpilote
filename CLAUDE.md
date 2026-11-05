@@ -5,10 +5,10 @@
 ## Le produit
 
 - Application web installable (PWA) d'aide à la visite de parcs d'attractions. À tout moment, elle donne la meilleure prochaine étape pour le groupe. Elle tient compte des attentes en direct, de la marche, des spectacles, des repas, du Single Rider, du Premier Access, de la Carte Facilité, des attractions répétées et du groupe scindé.
-- Version : voir `package.json` (0.6.0 au 05/11/2026). Le site est publié sur https://metazel.github.io/Parcpilote/ à chaque push sur `main`.
+- Version : voir `package.json` (0.7.0 au 05/11/2026). Le site est publié sur https://metazel.github.io/Parcpilote/ à chaque push sur `main`.
 - Parcs couverts (`src/data/destinations.ts`) :
   - **En direct** (données ThemeParks.wiki) : Disneyland Paris, Parc Astérix, Europa-Park, Futuroscope, Nigloland, Walibi Rhône-Alpes, Walibi Belgium, Walibi Holland, Gardaland, Mirabilandia et PortAventura World.
-  - **Mode estimé** : Puy du Fou et Parc Spirou. Les attentes sont estimées et corrigeables ; les spectacles, séances et horaires sont saisis par le visiteur.
+  - **Mode estimé** : Puy du Fou et Parc Spirou. Les attentes sont estimées et corrigeables ; les spectacles, séances et horaires sont saisis par le visiteur ou importés depuis le texte du programme qu'il colle (`src/data/programme.ts`, `importProgramme` du store).
 - Seul Disneyland Paris a un référentiel détaillé, avec démo, Heures de Magie en Plus et Carte Facilité. Ailleurs, la structure (parcs, entrées) se déduit du flux en direct.
 
 ## Architecture
@@ -79,7 +79,7 @@ Depuis l'environnement Claude, api.themeparks.wiki, Overpass et Nominatim sont i
 ## Suivi au 05/11/2026
 
 - PR #10 (Dependabot, playwright 1.63 → 1.64, mineure) : la tâche du lundi la traitera.
-- Puy du Fou : la reprise automatique du programme du jour est **bloquée tant que le parc n'a pas donné son accord écrit**. Un e-mail de demande a été rédigé. Avec l'accord : une tâche GitHub programmée chaque soir vers 18:00 lira le programme du lendemain, le validera et le publiera en JSON sur le site, avec la saisie manuelle en secours.
-- Proposé, en attente de réponse : un lien vers le programme officiel, et le collage du texte du programme analysé sur le téléphone (usage personnel, rien de republié).
+- Puy du Fou : **pas d'autorisation** de reprendre le programme (réponse du propriétaire le 05/11). La tâche quotidienne de reprise est abandonnée. Alternative livrée en 0.7.0 : lien vers le programme officiel et import du texte copié par le visiteur depuis une photo (analyse sur le téléphone, rien de republié).
+- Phase 2 possible, avec accord (nouvelle dépendance) : OCR intégré (Tesseract.js auto-hébergé) si l'essai en parc montre que le copier-coller du téléphone gêne.
 - Piste non prioritaire : Queue-Times comme source de secours. Elle impose un relais en ligne, car ce service n'autorise pas l'appel direct depuis le navigateur.
 - À faire : un essai réel dans un parc autre que Disneyland Paris, car les flux n'ont été testés qu'en simulation.

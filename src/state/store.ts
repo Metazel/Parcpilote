@@ -24,6 +24,15 @@ import {
   saveState,
 } from './storage';
 
+/** What the visitor kept from a pasted programme (minutes after midnight). */
+export interface ProgrammeSelection {
+  readonly hours: { readonly open: number; readonly close: number } | null;
+  readonly shows: ReadonlyArray<{ readonly id: string; readonly times: readonly number[] }>;
+  readonly newShows: ReadonlyArray<{ readonly name: string; readonly times: readonly number[] }>;
+  readonly waits: ReadonlyArray<{ readonly id: string; readonly min: number }>;
+  readonly closed: readonly string[];
+}
+
 export interface Alert {
   readonly id: string;
   readonly level: 'info' | 'warn';
@@ -921,6 +930,78 @@ export class AppStore {
     this.patchDay({ manualHours: { open: parkWallTime(now, openMin), close: parkWallTime(now, closeMin) } });
     this.manualTick(true);
     return true;
+  }
+
+  /**
+   * Manual mode: what the visitor confirmed from a pasted programme, applied in one go.
+   * Every value is checked again here (the selection comes from the UI). Returns the number
+   * of entries applied, or null outside manual mode.
+   */
+  importProgramme(sel: ProgrammeSelection): number | null {
+    if (this.state.data.mode !== 'manual') return null;
+    const now = this.state.now;
+    const today = parkDateKey(now);
+    const day = this.state.persisted.day;
+    const catalog = new Map(this.state.catalog);
+    const kindOf = (id: string) => catalog.get(id)?.kind;
+    const validMinute = (t: number) => Number.isInteger(t) && t >= 0 && t < 24 * 60;
+    const showtimes: Record<string, readonly number[]> = { ...day.manualShowtimes };
+    let applied = 0;
+
+    const addTimes = (id: string, times: readonly number[]) => {
+      const list = new Set(showtimes[id] ?? []);
+      for (const t of times) {
+        if (!validMinute(t) || list.size >= 20) continue;
+        const start = parkWallTime(now, t);
+        if (parkDateKey(start) !== today || list.has(start)) continue;
+        list.add(start);
+        applied++;
+      }
+      showtimes[id] = [...list].sort((a, b) => a - b);
+    };
+
+    for (const s of sel.shows.slice(0, 200)) if (kindOf(s.id) === 'show') addTimes(s.id, s.times);
+
+    let custom = this.state.persisted.custom;
+    const park = this.state.resort.parks[0];
+    const base = this.deps.realNow().toString(36);
+    for (const n of sel.newShows.slice(0, 30)) {
+      const name = n.name.trim().replace(/\s+/g, ' ');
+      if (!park || name.length < 2 || name.length > 80 || custom.length >= 200 || !n.times.some(validMinute)) continue;
+      const entry: CustomPlace = { dest: this.def.id, id: `custom-${base}${custom.length.toString(36)}`, name, kind: 'show', durationMin: 30 };
+      custom = [...custom, entry];
+      for (const p of customPlaces([entry], this.def.id, park)) catalog.set(p.id, p);
+      applied++;
+      addTimes(entry.id, n.times);
+    }
+
+    const manualWaits: Record<string, number> = { ...day.manualWaits };
+    for (const w of sel.waits.slice(0, 300)) {
+      if (kindOf(w.id) !== 'ride' || !Number.isInteger(w.min) || w.min < 0 || w.min > 300) continue;
+      manualWaits[w.id] = w.min;
+      applied++;
+    }
+
+    const closedReports: Record<string, number> = { ...day.closedReports };
+    for (const id of sel.closed.slice(0, 300)) {
+      if (kindOf(id) !== 'ride') continue;
+      closedReports[id] = now + CLOSED_REPORT_MS;
+      delete manualWaits[id];
+      applied++;
+    }
+
+    let manualHours = day.manualHours;
+    const h = sel.hours;
+    if (h && Number.isInteger(h.open) && Number.isInteger(h.close) && h.open >= 6 * 60 && h.close <= 24 * 60 && h.close > h.open + 60) {
+      manualHours = { open: parkWallTime(now, h.open), close: parkWallTime(now, h.close) };
+      applied++;
+    }
+
+    if (applied === 0) return 0;
+    this.persist({ custom, day: { ...day, manualShowtimes: showtimes, manualWaits, closedReports, manualHours } });
+    this.set({ catalog });
+    this.manualTick(true);
+    return applied;
   }
 
   resetDay(): void {

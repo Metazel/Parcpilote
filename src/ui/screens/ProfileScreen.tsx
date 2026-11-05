@@ -184,6 +184,9 @@ function DestinationPicker({ onboarding }: { onboarding: boolean }) {
           {data.mode === 'unavailable' && ' Données du parc inaccessibles pour le moment : une connexion est nécessaire au premier chargement.'}
         </span>
       </div>
+      <p>
+        <ExternalLink href={def.site}>Site officiel de {def.name}</ExternalLink> : calendrier, horaires, programme et billets.
+      </p>
     </section>
   );
 }
