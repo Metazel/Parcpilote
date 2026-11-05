@@ -682,6 +682,7 @@ input[type='number'],
 input[type='time'],
 input[type='search'],
 input[type='text'],
+textarea,
 select {
   width: 100%;
   min-height: 48px;
@@ -1995,7 +1996,8 @@ dialog::backdrop {
   background: var(--rule);
 }
 
-.add-place {
+.add-place,
+.programme-import {
   margin: 20px 0 8px;
   padding: 12px 14px;
   border: 1px dashed var(--ctl);
@@ -2003,7 +2005,8 @@ dialog::backdrop {
   background: var(--surface);
 }
 
-.add-place summary {
+.add-place summary,
+.programme-import summary {
   min-height: 44px;
   display: flex;
   align-items: center;
@@ -2013,11 +2016,13 @@ dialog::backdrop {
   list-style: none;
 }
 
-.add-place summary::-webkit-details-marker {
+.add-place summary::-webkit-details-marker,
+.programme-import summary::-webkit-details-marker {
   display: none;
 }
 
-.add-place summary::before {
+.add-place summary::before,
+.programme-import summary::before {
   content: '+';
   display: grid;
   place-items: center;
@@ -2030,18 +2035,43 @@ dialog::backdrop {
   line-height: 1;
 }
 
-.add-place[open] summary::before {
+.add-place[open] summary::before,
+.programme-import[open] summary::before {
   content: '−';
 }
 
-.add-place form {
+.add-place form,
+.programme-import form {
   display: grid;
   gap: 12px;
   margin-top: 8px;
 }
 
-.add-place .btn-primary {
+.add-place .btn-primary,
+.programme-import .btn-primary {
   justify-self: start;
+}
+
+textarea {
+  min-height: 9em;
+  resize: vertical;
+  font-variant-numeric: normal;
+}
+
+.programme-import > p {
+  margin: 8px 0;
+}
+
+.programme-preview {
+  margin-top: 16px;
+}
+
+.programme-preview h3 {
+  margin: 0 0 4px;
+}
+
+.programme-preview fieldset {
+  margin: 0;
 }
 
 .dest-select optgroup {

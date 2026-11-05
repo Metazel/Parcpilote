@@ -4,7 +4,9 @@ import { MAX_REPEATS, heightAllowed } from '../../domain/planner';
 import { MINUTE, formatHM, parkWallTime } from '../../domain/time';
 import type { Attraction, ParkId, ParkInfo, Priority, Show } from '../../domain/types';
 import { useAppState, useStore } from '../context';
+import { ExternalLink } from '../components/ExternalLink';
 import { MealPicker } from '../components/MealPicker';
+import { ProgrammeImport } from '../components/ProgrammeImport';
 import { liveLabel, parkClass, whereLabel, waitBand } from '../format';
 
 type ParkFilter = 'all' | ParkId;
@@ -278,8 +280,10 @@ export function ListScreen() {
       <p class="muted">
         {persisted.wishes.length === 0
           ? 'Marquez ce que vous voulez faire. Les incontournables passent en priorité.'
-          : `${persisted.wishes.length} ${persisted.wishes.length > 1 ? 'attractions choisies' : 'attraction choisie'}, dont ${mustCount} ${mustCount > 1 ? 'incontournables' : 'incontournable'}.`}
+          : `${persisted.wishes.length} ${persisted.wishes.length > 1 ? 'attractions choisies' : 'attraction choisie'}, dont ${mustCount} ${mustCount > 1 ? 'incontournables' : 'incontournable'}.`}{' '}
+        <ExternalLink href={resort.def.site}>Site officiel de {resort.def.name}</ExternalLink>
       </p>
+      {data.mode === 'manual' && <ProgrammeImport />}
       {(['lunch', 'dinner'] as const).some((m) => persisted.profile?.[m].enabled && persisted.profile[m].mode !== 'free') && (
         <section class="land-group meals" aria-labelledby="meals-title">
           <h2 class="land meal" id="meals-title">

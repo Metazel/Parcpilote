@@ -60,6 +60,8 @@ export interface DestinationDef {
   /** Manual mode: what most places of the park are. */
   readonly mainlyShows: boolean;
   readonly site: string;
+  /** Official page with the day's programme or opening calendar, when there is one. */
+  readonly programmeUrl: string | null;
 }
 
 const H = (h: number, m = 0) => h * 60 + m;
@@ -89,7 +91,7 @@ function liveDest(
   hours: readonly [number, number] = [H(10), H(18)],
   radiusM = 1300,
 ): DestinationDef {
-  return { id, name, place, country, live, parks: [], center: null, radiusM, hours, dining: dining(site), features: { emh: false, easyAccess: false, demo: false }, mainlyShows: false, site };
+  return { id, name, place, country, live, parks: [], center: null, radiusM, hours, dining: dining(site), features: { emh: false, easyAccess: false, demo: false }, mainlyShows: false, site, programmeUrl: null };
 }
 
 export const DESTINATIONS: readonly DestinationDef[] = [
@@ -110,6 +112,7 @@ export const DESTINATIONS: readonly DestinationDef[] = [
     features: { emh: true, easyAccess: true, demo: true },
     mainlyShows: false,
     site: 'https://www.disneylandparis.com/fr-fr/',
+    programmeUrl: null,
   },
   liveDest('asterix', 'Parc Astérix', 'Plailly', 'France', ['parc asterix', 'parcasterix'], 'https://www.parcasterix.fr/'),
   liveDest('europapark', 'Europa-Park', 'Rust', 'Allemagne', ['europa park', 'europapark'], 'https://www.europapark.de/', [H(9), H(18)], 1600),
@@ -131,10 +134,11 @@ export const DESTINATIONS: readonly DestinationDef[] = [
     center: { lat: 46.8932, lon: -0.9309 },
     radiusM: 1400,
     hours: [H(9, 30), H(19)],
-    dining: dining('https://www.puydufou.com/'),
+    dining: dining('https://www.puydufou.com/france/fr'),
     features: { emh: false, easyAccess: false, demo: false },
     mainlyShows: true,
-    site: 'https://www.puydufou.com/',
+    site: 'https://www.puydufou.com/france/fr',
+    programmeUrl: 'https://www.puydufou.com/france/fr/program-day/download-today',
   },
   {
     id: 'spirou',
@@ -146,10 +150,11 @@ export const DESTINATIONS: readonly DestinationDef[] = [
     center: { lat: 44.0206, lon: 4.9702 },
     radiusM: 800,
     hours: [H(10), H(18)],
-    dining: dining('https://www.parcspirou.com/'),
+    dining: dining('https://www.parc-spirou.com/'),
     features: { emh: false, easyAccess: false, demo: false },
     mainlyShows: false,
-    site: 'https://www.parcspirou.com/',
+    site: 'https://www.parc-spirou.com/',
+    programmeUrl: 'https://www.parc-spirou.com/calendrier/',
   },
 ];
 

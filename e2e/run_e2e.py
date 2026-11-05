@@ -465,7 +465,53 @@ def run_parks(browser: Browser) -> None:
         assert not [e for e in errors if "dialog" in e], errors
         shot(page, "21-puy-du-fou")
 
+    @scenario("Puy du Fou : programme collé, vérifié puis ajouté à la journée (RGAA)")
+    def puy_import():
+        tab(page, "Ma liste")
+        panel = page.locator("details.programme-import")
+        panel.locator("summary").click()
+        link = panel.get_by_role("link", name=re.compile("Programme officiel de Puy du Fou"))
+        expect(link).to_have_attribute("href", "https://www.puydufou.com/france/fr/program-day/download-today")
+        expect(link).to_have_attribute("target", "_blank")
+        page.get_by_role("button", name="Analyser le texte").click()
+        expect(panel.get_by_role("status")).to_contain_text("Collez d’abord le texte")
+        page.get_by_label("Texte du programme").fill(
+            "PROGRAMME DU JOUR\nOuverture 9h30 - Fermeture 19h00\nLe Signe du Triomphe 11h30 - 17h00\n"
+            "Le Bal des Oiseaux Fantômes\n12h15\n<img src=x onerror=alert(1)> Final 21h"
+        )
+        page.get_by_role("button", name="Analyser le texte").click()
+        heading = page.get_by_role("heading", name="Informations reconnues")
+        expect(heading).to_be_focused()
+        expect(page.get_by_role("checkbox", name="Ouvert de 09:30 à 19:00")).to_be_checked()
+        expect(page.get_by_role("checkbox", name=re.compile("Le Signe du Triomphe.*11:30, 17:00"))).to_be_checked()
+        oiseaux = page.get_by_role("checkbox", name=re.compile("Le Bal des Oiseaux Fantômes.*12:15"))
+        expect(oiseaux).not_to_be_checked()
+        hostile = page.get_by_role("checkbox", name=re.compile("Final.*21:00"))
+        expect(hostile).not_to_be_checked()
+        assert page.locator("img[src=x]").count() == 0, "balise du texte collé insérée dans la page"
+        oiseaux.check()
+        problems = []
+        for _ in (1, 2):
+            page.add_script_tag(content=axe)
+            res = page.evaluate("axe.run(document, { runOnly: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] })")
+            problems += [f"{v['id']} ({len(v['nodes'])}) {v['nodes'][0]['target']}" for v in res["violations"] if v["impact"] in ("serious", "critical", "moderate")]
+            if page.get_by_role("button", name="Ajouter à ma journée").count() == 0:
+                break
+            shot(page, "22-puy-import-apercu")
+            page.get_by_role("button", name="Ajouter à ma journée").click()
+            expect(panel.get_by_role("status")).to_contain_text("informations ajoutées")
+        assert not problems, " | ".join(problems)
+        signe = page.get_by_role("radiogroup", name="Séance de Le Signe du Triomphe")
+        for t in ("11:30", "14:30", "17:00"):
+            expect(signe.get_by_role("radio", name=t)).to_be_visible()
+        expect(page.get_by_role("radiogroup", name="Séance de Le Bal des Oiseaux Fantômes").get_by_role("radio", name="12:15")).to_be_visible()
+        assert page.get_by_role("group", name=re.compile("Final")).count() == 0, "spectacle non coché ajouté"
+        tab(page, "Groupe")
+        expect(page.get_by_label("Fermeture")).to_have_value("19:00")
+        assert not [e for e in errors if "dialog" in e or "pageerror" in e], errors
+
     puy()
+    puy_import()
     ctx.close()
 
 
