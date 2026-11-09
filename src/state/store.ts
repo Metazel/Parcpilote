@@ -4,7 +4,7 @@ import { buildPois } from '../data/pois';
 import { curatedParks, demoSnapshot } from '../data/demo';
 import { type DestinationDef, destination } from '../data/destinations';
 import { MANUAL_WAIT_MIN, cachedCatalog, customPlaces, defParks, manualCatalog, manualSnapshot } from '../data/manual';
-import { type FetchFn, LiveDataError, loadLive } from '../data/themeparks';
+import { type FetchFn, LiveDataError, type LiveBundle, loadLive, placeFromSights } from '../data/themeparks';
 import { DETOUR_FACTOR, type NetworkFn, haversineM, walkMinutes } from '../domain/geo';
 import { type Route, WalkGraph } from '../domain/walkGraph';
 import { MAX_REPEATS, type PlanInput, computePlan, entrancesOf, wantedRides } from '../domain/planner';
@@ -281,10 +281,11 @@ export class AppStore {
       this.nextLiveAttempt = real + LIVE_REFRESH_MS;
       const wasFallback = this.state.data.mode === 'demo' || this.state.data.mode === 'manual';
       this.officialRestaurants = bundle.restaurants;
-      const catalog = new Map(bundle.catalog);
+      const sights = this.osmDest === def.id ? (this.osmData?.sights ?? []) : [];
+      const catalog = placeFromSights(bundle.catalog, sights, bundle.snapshot.parks) ?? new Map(bundle.catalog);
       const park = bundle.snapshot.parks[0];
       if (park) for (const p of customPlaces(this.state.persisted.custom, def.id, park)) catalog.set(p.id, p);
-      this.set({ catalog, resort: { def, parks: bundle.snapshot.parks }, data: { mode: 'live', state: 'ok', message: null, fetchedAt: real }, now: real });
+      this.set({ catalog, resort: { def, parks: bundle.snapshot.parks }, data: { mode: 'live', state: 'ok', message: liveNotice(def, bundle), fetchedAt: real }, now: real });
       this.rebuildPois();
       this.persist({
         lastLive: bundle.snapshot,
@@ -397,9 +398,11 @@ export class AppStore {
     } catch {
       data = null;
     }
+    let failed = false;
     if (!data && this.deps.fetchFn && area) {
       try {
-        data = await fetchOsm(this.deps.fetchFn, now, area, !def.live);
+        // Sights: the catalogue of parks without live feed, and positions for feeds without any.
+        data = await fetchOsm(this.deps.fetchFn, now, area, !def.live || def.parks.length === 0);
         try {
           this.deps.storage.setItem(key, JSON.stringify(data));
         } catch {
@@ -407,9 +410,12 @@ export class AppStore {
         }
       } catch {
         data = null;
+        failed = true;
       }
     }
     if (def.id !== this.def.id) return; // destination changed meanwhile
+    // Overpass is often busy: a failed download is tried again at the next live refresh.
+    if (failed) this.osmDest = '';
     this.osmData = data;
     this.deps.planner?.setNetwork(data);
     if (!data) {
@@ -426,6 +432,8 @@ export class AppStore {
       this.manualTick(true);
       return;
     }
+    const placed = placeFromSights(this.state.catalog, data.sights, this.state.resort.parks);
+    if (placed) this.set({ catalog: placed });
     this.rebuildPois();
     this.recompute();
   }
@@ -1045,4 +1053,21 @@ export class AppStore {
     this.set({ gps: { lat, lon, park: best.park }, gpsAccuracyM: accuracyM !== null && Number.isFinite(accuracyM) ? Math.round(accuracyM) : null });
     this.recompute();
   }
+}
+
+const DAY_FORMAT = new Intl.DateTimeFormat('fr-FR', { timeZone: 'Europe/Paris', weekday: 'long', day: 'numeric', month: 'long' });
+
+/** Banner for a live park that is closed today, or whose opening days are not published. */
+export function liveNotice(def: DestinationDef, bundle: Pick<LiveBundle, 'closure' | 'hoursUnknown'>): string | null {
+  if (bundle.closure) {
+    const next = bundle.closure.next;
+    const when = next ? ` Prochaine ouverture : ${DAY_FORMAT.format(next.open)}, ${formatHM(next.open)}–${formatHM(next.close)}.` : '';
+    return `${def.name} est fermé aujourd’hui selon ses horaires officiels.${when} Vous pouvez préparer votre liste en attendant.`;
+  }
+  if (bundle.hoursUnknown) {
+    const [o, c] = def.hours;
+    const hm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+    return `${def.name} ne publie pas ses horaires du jour : ${hm(o)}–${hm(c)} supposés. Vérifiez-les sur le site officiel avant de partir.`;
+  }
+  return null;
 }
