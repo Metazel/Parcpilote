@@ -60,6 +60,10 @@ export interface DayProgress {
   readonly manualWaits: Readonly<Record<string, number>>;
   /** Manual mode: the day's opening hours, when the visitor set them. */
   readonly manualHours: { readonly open: number; readonly close: number } | null;
+  /** Unforeseen break: the plan starts again at this instant. */
+  readonly pauseUntil: number | null;
+  /** "Plus tard": place id → instant before which it is not planned. */
+  readonly later: Readonly<Record<string, number>>;
 }
 
 /** A ride or show the visitor added (manual mode, or anything missing from the feed). */
@@ -131,7 +135,7 @@ export const DEFAULT_PROFILE: GroupProfile = {
 };
 
 export function emptyDay(now: number): DayProgress {
-  return { dateKey: parkDateKey(now), done: [], skipped: [], lunchDone: false, dinnerDone: false, meals: {}, position: null, shows: [], paBookings: [], closedReports: {}, forcedDown: {}, easyAccess: null, manualShowtimes: {}, manualWaits: {}, manualHours: null };
+  return { dateKey: parkDateKey(now), done: [], skipped: [], lunchDone: false, dinnerDone: false, meals: {}, position: null, shows: [], paBookings: [], closedReports: {}, forcedDown: {}, easyAccess: null, manualShowtimes: {}, manualWaits: {}, manualHours: null, pauseUntil: null, later: {} };
 }
 
 export function defaultState(now: number): PersistedState {
@@ -425,6 +429,8 @@ function parseDay(v: unknown, now: number): DayProgress {
     manualShowtimes: parseShowtimes(v.manualShowtimes),
     manualWaits: parseWaits(v.manualWaits),
     manualHours: parseWindow(v.manualHours),
+    pauseUntil: epoch(v.pauseUntil),
+    later: parseEpochMap(v.later),
   };
 }
 

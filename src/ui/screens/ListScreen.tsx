@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'preact/hooks';
 import { normalizeName } from '../../data/catalog';
+import { forChildren, isGraded } from '../../data/forecast';
 import { MAX_REPEATS, heightAllowed } from '../../domain/planner';
 import { MINUTE, formatHM, parkWallTime } from '../../domain/time';
 import type { Attraction, ParkId, ParkInfo, Priority, Show } from '../../domain/types';
@@ -256,12 +257,16 @@ export function ListScreen() {
   const parks = resort.parks;
   const [park, setPark] = useState<ParkFilter>('all');
   const [query, setQuery] = useState('');
+  const [kids, setKids] = useState(false);
+  const graded = useMemo(() => isGraded(catalog), [catalog]);
+  const smallest = persisted.profile?.smallestHeightCm ?? null;
 
   const groups = useMemo(() => {
     const q = normalizeName(query);
     const byLand = new Map<string, { park: ParkId; rides: Attraction[]; shows: Show[] }>();
     for (const p of catalog.values()) {
       if (park !== 'all' && p.park !== park) continue;
+      if (kids && graded && !forChildren(p, smallest)) continue;
       if (q && !normalizeName(p.name).includes(q)) continue;
       const key = `${p.park}|${p.land}`;
       let g = byLand.get(key);
@@ -270,7 +275,7 @@ export function ListScreen() {
       else g.shows.push(p);
     }
     return [...byLand.entries()].sort(([a], [b]) => a.localeCompare(b, 'fr'));
-  }, [catalog, park, query]);
+  }, [catalog, park, query, kids, graded, smallest]);
 
   const mustCount = persisted.wishes.filter(([, p]) => p === 'must').length;
 
@@ -311,7 +316,20 @@ export function ListScreen() {
           Rechercher une attraction
         </label>
         <input id="search" type="search" placeholder="Rechercher une attraction ou un spectacle" maxLength={60} value={query} onInput={(e) => setQuery((e.target as HTMLInputElement).value)} />
+        {graded && (
+          <label class="toggle kids-filter">
+            <input type="checkbox" checked={kids} onChange={(e) => setKids((e.target as HTMLInputElement).checked)} aria-describedby="kids-hint" />
+            <span>Pour les enfants</span>
+          </label>
+        )}
       </div>
+      {graded && (
+        <p class="hint" id="kids-hint">
+          {kids
+            ? `Attractions douces${smallest !== null ? ` et accessibles à ${smallest} cm` : ''}, et spectacles. Marquez leurs préférées en « Incontournable » : elles passeront en priorité.`
+            : 'Les enfants ont leurs préférées ? Filtrez, puis marquez-les en « Incontournable ».'}
+        </p>
+      )}
 
       {groups.length === 0 && <p class="muted">{catalog.size === 0 ? 'La liste du parc se charge ; si elle reste vide, ajoutez vous-même ce que vous voulez faire.' : 'Aucun résultat pour cette recherche.'}</p>}
       {groups.map(([key, g]) => (

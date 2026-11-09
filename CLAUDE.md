@@ -5,7 +5,7 @@
 ## Le produit
 
 - Application web installable (PWA) d'aide à la visite de parcs d'attractions. À tout moment, elle donne la meilleure prochaine étape pour le groupe. Elle tient compte des attentes en direct, de la marche, des spectacles, des repas, du Single Rider, du Premier Access, de la Carte Facilité, des attractions répétées et du groupe scindé.
-- Version : voir `package.json` (0.8.0 au 09/11/2026). Le site est publié sur https://metazel.github.io/Parcpilote/ à chaque push sur `main`.
+- Version : voir `package.json` (0.9.0 au 09/11/2026). Le site est publié sur https://metazel.github.io/Parcpilote/ à chaque push sur `main`.
 - Parcs couverts (`src/data/destinations.ts`) :
   - **En direct** (données ThemeParks.wiki) : Disneyland Paris, Parc Astérix, Europa-Park, Futuroscope, Nigloland, Walibi Rhône-Alpes, Walibi Belgium, Walibi Holland, Gardaland, Mirabilandia et PortAventura World.
   - **Mode estimé** : Puy du Fou et Parc Spirou. Les attentes sont estimées et corrigeables ; les spectacles, séances et horaires sont saisis par le visiteur ou importés depuis le texte du programme qu'il colle (`src/data/programme.ts`, `importProgramme` du store).
@@ -80,6 +80,8 @@ Depuis l'environnement Claude, api.themeparks.wiki, Overpass et Nominatim sont i
 
 - 0.7.0 publiée le 05/11 (PR #10 et #12 fusionnées).
 - 0.8.0 (09/11) : recette en données réelles depuis le navigateur du propriétaire (flux ThemeParks.wiki et Overpass réels). Corrigés : Nigloland sans positions, parcs annexes exclus (`onlyParks`), jour de fermeture et prochaine ouverture (`scheduleOutlook`, `liveNotice`), horaires non publiés, nouvel essai OSM. Cas réels reproduits dans `tests/realdata.test.ts` (structures réelles, valeurs inventées).
+- 0.9.0 (09/11) : « Préparer et vivre sa visite », pensé par moments de la visite (tableau dans le README). Plan prévisionnel d'un jour à venir (`src/data/forecast.ts`, `parseOpenings`, `AppStore.forecast`, sans toucher à la journée en cours), carte « Par où commencer », « Un besoin ? » (`nearest`, `mapFocus`), pause (`pauseUntil`) et « Plus tard » (`later`), filtre « Pour les enfants » (`forChildren`, seulement si la liste est graduée).
+- TypeScript 7 : PR #16 fermée le 09/11 à la demande du propriétaire (typescript-eslint ne le gère pas). La tâche du lundi surveille et rouvre la PR (`@dependabot reopen`) quand ce sera possible ; fusion soumise à accord (majeure).
 - Alerte modérée minimatch (outillage eslint, hors application publiée) : décision du propriétaire le 05/11, **attendre le correctif amont**. La mise à jour de sécurité Dependabot échoue tant qu'eslint exige minimatch 10 ; dès qu'une version compatible sort, la PR Dependabot relève de l'option A. Ne pas forcer la version par `overrides`.
 - Puy du Fou : **pas d'autorisation** de reprendre le programme (réponse du propriétaire le 05/11). La tâche quotidienne de reprise est abandonnée. Alternative livrée en 0.7.0 : lien vers le programme officiel et import du texte copié par le visiteur depuis une photo (analyse sur le téléphone, rien de republié).
 - Phase 2 possible, avec accord (nouvelle dépendance) : OCR intégré (Tesseract.js auto-hébergé) si l'essai en parc montre que le copier-coller du téléphone gêne.

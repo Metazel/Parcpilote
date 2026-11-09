@@ -1,6 +1,6 @@
 # ParcPilote
 
-Assistant de visite de parcs d'attractions : à tout moment, la meilleure prochaine étape pour le groupe, en tenant compte des temps d'attente en direct, de la marche, des spectacles choisis, des repas, du Single Rider, du Premier Access et de la Carte Facilité. Version 0.8.0.
+Assistant de visite de parcs d'attractions : à tout moment, la meilleure prochaine étape pour le groupe, en tenant compte des temps d'attente en direct, de la marche, des spectacles choisis, des repas, du Single Rider, du Premier Access et de la Carte Facilité. Version 0.9.0.
 
 | Parc | Données |
 | --- | --- |
@@ -9,6 +9,21 @@ Assistant de visite de parcs d'attractions : à tout moment, la meilleure procha
 | Puy du Fou, Parc Spirou Provence | Mode estimé : pas de flux public ; spectacles et attractions issus d'OpenStreetMap ou ajoutés par vous, attentes estimées à corriger sur place, séances, horaires, attentes et fermetures saisis ou importés depuis le programme du jour (texte copié d'une photo) |
 
 ## Ce que fait l'application
+
+### Les moments de la visite (0.9.0)
+
+| Moment | Ce que fait l'application |
+| --- | --- |
+| Je programme une visite à venir | **Plan → Jour** : plan prévisionnel du jour choisi parmi les ouvertures publiées (sinon les deux semaines à venir, horaires habituels à vérifier), avec des attentes estimées d'après une journée type. La journée en cours n'est pas modifiée. Le jour J, le plan suit les attentes en direct. |
+| Un parc ou deux | Disneyland Paris : deux parcs et parc de départ. Le prévisionnel montre ce qui tient dans la journée et ce qui n'y tient pas, avec la raison. |
+| Manger au parc, au restaurant ou non | Groupe : déjeuner et dîner sur le pouce, à table (avec réservation), en pique-nique ou sans pause, repris dans le prévisionnel. |
+| Les enfants d'abord | Ma liste : filtre **« Pour les enfants »** (attractions douces et accessibles à la taille du plus petit, spectacles), puis « Incontournable » pour leurs préférées. |
+| Arrivé à l'entrée, par où commencer ? | Carte **« Par où commencer »** : l'heure à laquelle être à l'entrée (30 min avant l'ouverture, ou avant les Heures de Magie en Plus) et les trois premières étapes. Accessible depuis Maintenant quand le parc n'est pas encore ouvert. |
+| Toilettes, eau, faim | Maintenant → **« Un besoin ? »** : les trois lieux les plus proches en minutes de marche, et l'itinéraire tracé sur la carte. |
+| Un imprévu décale le programme | **« Pause » de 15, 30 ou 45 min** : le plan repart après. **« Plus tard »** : l'attraction revient dans le plan au bout d'une heure, sans être perdue comme avec « Passer ». |
+| Pas de réseau dans le parc | **« Préparer le hors-ligne »** : liste du parc, allées et services gardés sur le téléphone (le fond de carte, lui, demande le réseau). |
+
+### Toutes les fonctions
 
 - **Maintenant** : la prochaine étape sur un seul écran (marche, attente, heure d'arrivée, file conseillée), avec « Fait », « Passer » et « Signaler ».
 - **Plan** : l'itinéraire de la journée sous forme de tracé, recalculé à chaque mise à jour ; « Faire maintenant » et « Retirer » par étape.
@@ -89,9 +104,9 @@ Le workflow `.github/workflows/ci.yml` vérifie, construit, teste puis publie l'
 
 | Job | Contenu |
 | --- | --- |
-| `verify` | types, lint, 143 tests unitaires, `npm audit` |
+| `verify` | types, lint, 155 tests unitaires, `npm audit` |
 | `build` | PWA (`dist/`) et fichier unique (`dist-single/`) ; artefact Pages sur `main` |
-| `e2e` | 50 scénarios Playwright (dont accessibilité RGAA), captures en artefact ; une suite en échec est rejouée une fois, les instabilités sont signalées en annotation |
+| `e2e` | 53 scénarios Playwright (dont accessibilité RGAA), captures en artefact ; une suite en échec est rejouée une fois, les instabilités sont signalées en annotation |
 | `deploy` | publication GitHub Pages (push ou lancement manuel sur `main`) |
 
 Les pull requests passent les trois premiers jobs sans publier. Un passage hebdomadaire rejoue l'audit. Les actions sont épinglées par empreinte SHA, les permissions limitées par job ; le workflow est contrôlé par `actionlint` et `zizmor`. Dependabot (`.github/dependabot.yml`) propose chaque semaine les mises à jour npm, pip et GitHub Actions, avec un délai de 14 jours.
@@ -123,6 +138,7 @@ Recette faite le 09/11/2026 sur les vrais flux ThemeParks.wiki et OpenStreetMap 
 - La qualité des trajets dépend de la cartographie OpenStreetMap des parcs ; une incohérence (trajet plus de 4 fois la ligne droite) est ignorée au profit de l'estimation.
 - Carte Facilité : règles reprises du fonctionnement constaté (heure de retour = attente du moment, une inscription à la fois, 5 personnes au plus). L'inscription se fait à l'attraction ; l'attente résiduelle à l'entrée Premier Access est estimée à 5 min. Le créneau est supposé valable jusqu'à la fermeture.
 - Groupe scindé : les enfants sont supposés accompagner le titulaire de la carte ; les tailles minimales s'appliquent à tout le groupe.
+- Plan prévisionnel : attentes typiques selon l'heure (et l'intensité de l'attraction quand la liste la connaît, à Disneyland Paris), pas une prévision de fréquentation du jour ; séances de spectacles inconnues avant le jour même, sauf pour Disneyland Paris (journée type de la démo).
 - Futuroscope : le flux donne des noms en anglais et mêle les bassins de l'Aquascope aux attractions du parc ; à filtrer à la main dans Ma liste.
 - Pas de notifications en arrière-plan (exigent un serveur push), pas de partage communautaire des signalements : prévus en phase 2 avec la collecte d'historique.
 

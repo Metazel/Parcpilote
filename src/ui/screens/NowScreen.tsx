@@ -1,5 +1,5 @@
 import { useState } from 'preact/hooks';
-import { MINUTE, formatHM, parkWallTime } from '../../domain/time';
+import { MINUTE, formatHM, parkDateKey, parkWallTime } from '../../domain/time';
 import type { PlanStep } from '../../domain/types';
 import { useAppState, useStore } from '../context';
 import type { Tab } from '../context';
@@ -206,6 +206,11 @@ function NextSign({ step, now, report, go }: { step: PlanStep; now: number; repo
         <button class="btn btn-quiet" type="button" onClick={() => store.skipStep(step)}>
           Passer
         </button>
+        {step.targetId && !meal && !booking && (
+          <button class="btn btn-quiet" type="button" onClick={() => store.postpone(step.targetId)} aria-label={`Plus tard : ${stepTitle(step)} revient dans le plan dans une heure`}>
+            Plus tard
+          </button>
+        )}
         {step.targetId && step.walkMin > 0 && (
           <button class="btn btn-quiet" type="button" onClick={() => go('map')}>
             Voir le trajet
@@ -218,6 +223,99 @@ function NextSign({ step, now, report, go }: { step: PlanStep; now: number; repo
         )}
       </div>
       </div>
+    </section>
+  );
+}
+
+type Need = 'toilets' | 'water' | 'food' | 'pause';
+const NEEDS: ReadonlyArray<readonly [Need, string]> = [
+  ['toilets', 'Toilettes'],
+  ['water', 'Eau'],
+  ['food', 'Manger'],
+  ['pause', 'Pause'],
+];
+
+/** Unforeseen needs: the nearest toilets, water or food, or a break that shifts the plan. */
+function NeedPanel({ go }: { go: (tab: Tab) => void }) {
+  const store = useStore();
+  useAppState(); // re-render with position and data
+  const [need, setNeed] = useState<Need | null>(null);
+  const near = need && need !== 'pause' ? store.nearest(need) : [];
+  return (
+    <section class="panel need" aria-labelledby="need-title">
+      <h2 id="need-title">Un besoin ?</h2>
+      <div class="row need-buttons">
+        {NEEDS.map(([k, label]) => (
+          <button key={k} class={`btn btn-small${need === k ? ' btn-primary' : ''}`} type="button" aria-pressed={need === k} onClick={() => setNeed(need === k ? null : k)}>
+            {label}
+          </button>
+        ))}
+      </div>
+      {need === 'pause' && (
+        <div>
+          <p class="hint">Le plan repart après la pause, depuis l’endroit où vous êtes.</p>
+          <div class="row">
+            {[15, 30, 45].map((m) => (
+              <button
+                key={m}
+                class="btn btn-small"
+                type="button"
+                onClick={() => {
+                  store.pause(m);
+                  setNeed(null);
+                }}
+              >
+                {m} min
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      {need && need !== 'pause' && (
+        near.length > 0 ? (
+          <ul class="waits nearby" aria-label={`${NEEDS.find(([k]) => k === need)?.[1]} les plus proches`}>
+            {near.map(({ poi, min }) => (
+              <li key={poi.id}>
+                <span>
+                  <span class="nearby-name">{poi.name}</span>
+                  <span class="muted num"> {minutes(min)} à pied</span>
+                </span>
+                <button
+                  class="btn btn-small"
+                  type="button"
+                  aria-label={`Itinéraire vers ${poi.name}`}
+                  onClick={() => {
+                    store.setMapFocus(poi.id);
+                    go('map');
+                  }}
+                >
+                  Itinéraire
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p class="muted">Aucun lieu de ce type connu : les données OpenStreetMap ne sont pas chargées (réseau requis une première fois).</p>
+        )
+      )}
+    </section>
+  );
+}
+
+/** A break in progress, with a way out. */
+function PauseBanner() {
+  const store = useStore();
+  const { persisted, now } = useAppState();
+  const until = persisted.day.pauseUntil;
+  if (until === null || until <= now) return null;
+  return (
+    <section class="panel pause-banner" role="status">
+      <p>
+        Pause jusqu’à <strong>{formatHM(until)}</strong> : le plan reprend ensuite.
+      </p>
+      <button class="btn btn-small" type="button" onClick={() => store.resume()}>
+        Reprendre maintenant
+      </button>
     </section>
   );
 }
@@ -353,9 +451,21 @@ export function NowScreen({ go, report }: Props) {
       <div class="empty">
         <h1>Que voulez-vous faire aujourd'hui ?</h1>
         <p class="muted">Choisissez vos attractions incontournables et vos spectacles : l'itinéraire se calcule tout seul, puis s'adapte aux attentes et aux pannes.</p>
-        <button class="btn btn-primary" type="button" onClick={() => go('list')}>
-          Choisir les attractions
-        </button>
+        <div class="row">
+          <button class="btn btn-primary" type="button" onClick={() => go('list')}>
+            Choisir les attractions
+          </button>
+          <button
+            class="btn"
+            type="button"
+            onClick={() => {
+              store.setPrepDate(store.prepDays()[0]?.dateKey ?? null);
+              go('plan');
+            }}
+          >
+            Préparer une visite à venir
+          </button>
+        </div>
       </div>
     );
   }
@@ -371,10 +481,12 @@ export function NowScreen({ go, report }: Props) {
   const [first, ...rest] = plan?.steps ?? [];
   const doneCount = persisted.day.done.length;
   const parkClosed = Object.values(snapshot.hours).every((h) => now >= h.close || now < h.open - 60 * MINUTE);
+  const nextDay = parkClosed ? (store.prepDays()[0] ?? null) : null;
 
   return (
     <div class="now-layout">
       <div class="now-main">
+      <PauseBanner />
       {first ? (
         <NextSign step={first} now={now} report={report} go={go} />
       ) : (
@@ -390,6 +502,18 @@ export function NowScreen({ go, report }: Props) {
               : 'Tout ce qui reste dans votre liste est fait, fermé ou hors de portée avant la fermeture. Ajoutez des attractions pour continuer.'}
           </p>
           <div class="row">
+            {parkClosed && nextDay && (
+              <button
+                class="btn btn-primary"
+                type="button"
+                onClick={() => {
+                  store.setPrepDate(nextDay.dateKey);
+                  go('plan');
+                }}
+              >
+                {nextDay.dateKey === parkDateKey(now) ? 'Par où commencer aujourd’hui' : 'Préparer ma prochaine visite'}
+              </button>
+            )}
             {parkClosed && state.data.mode !== 'demo' && state.resort.def.features.demo && (
               <button class="btn btn-primary" type="button" onClick={() => store.setSource('demo')}>
                 Préparer sur une journée simulée
@@ -404,6 +528,7 @@ export function NowScreen({ go, report }: Props) {
       </div>
 
       <div class="now-side">
+      <NeedPanel go={go} />
       <EasyAccessHeld />
 
       <PremierAccessAdvice />
