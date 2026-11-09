@@ -1,5 +1,6 @@
 import { haversineM } from '../domain/geo';
 import { parkDateKey, parkWallTime } from '../domain/time';
+import type { CompactSight } from '../domain/walkGraph';
 import type {
   Attraction,
   LiveAttraction,
@@ -82,7 +83,7 @@ export function parseDestinations(json: unknown, def: DestinationDef): ApiPark[]
       if (def.parks.length > 0) {
         const known = def.parks.find((k) => k.match.test(normalizeName(name)));
         if (known && !parks.some((x) => x.park === known.id)) parks.push({ id, park: known.id, name: known.name });
-      } else if (!parks.some((x) => x.park === id)) {
+      } else if (!parks.some((x) => x.park === id) && (!def.onlyParks || def.onlyParks.test(normalizeName(name)))) {
         parks.push({ id, park: id, name });
       }
     }
@@ -182,6 +183,43 @@ export function parseSchedule(json: unknown, now: number): ParkHours | null {
   }
   const op = windows.OPERATING;
   return op ? { open: op.open, close: op.close, emh: windows.EXTRA_HOURS } : null;
+}
+
+/**
+ * What the published schedule says beyond today: whether the park publishes opening days at
+ * all, and its next opening window after today (to tell a closed day from missing data).
+ */
+export function scheduleOutlook(json: unknown, now: number): { readonly known: boolean; readonly next: TimeWindow | null } {
+  if (!isRecord(json)) return { known: false, next: null };
+  const today = parkDateKey(now);
+  let known = false;
+  let next: TimeWindow | null = null;
+  for (const s of arr(json.schedule) ?? []) {
+    if (!isRecord(s) || oneOf(s.type, ['OPERATING'] as const) === null) continue;
+    const o = isoTime(s.openingTime);
+    const c = isoTime(s.closingTime);
+    if (o === null || c === null || c <= o) continue;
+    known = true;
+    if (parkDateKey(o) > today && (!next || o < next.open)) next = { open: o, close: c };
+  }
+  return { known, next };
+}
+
+/** Places of a live park that the feed left at the entrance, moved to their OpenStreetMap position (same name). */
+export function placeFromSights(catalog: ReadonlyMap<string, Place>, sights: readonly CompactSight[], parks: readonly ParkInfo[]): Map<string, Place> | null {
+  if (sights.length === 0) return null;
+  const keyed = sights.map(([name, lat, lon, kind]) => ({ key: normalizeName(name), lat, lon, kind }));
+  let out: Map<string, Place> | null = null;
+  for (const place of catalog.values()) {
+    const gate = parks.find((p) => p.id === place.park)?.entrance;
+    if (!gate || place.lat !== gate.lat || place.lon !== gate.lon) continue;
+    const key = normalizeName(place.name);
+    const hit = keyed.find((k) => k.key === key) ?? keyed.find((k) => namesMatch(k.key, key));
+    if (!hit || haversineM(gate, hit) > MAX_DISTANCE_FROM_GATE_M) continue;
+    out ??= new Map(catalog);
+    out.set(place.id, { ...place, lat: hit.lat, lon: hit.lon });
+  }
+  return out;
 }
 
 const SINGLE_RIDER_SUFFIX = / single rider$/;
@@ -342,6 +380,10 @@ export interface LiveBundle {
   readonly snapshot: LiveSnapshot;
   /** Official restaurants with a usable position. */
   readonly restaurants: ReadonlyArray<{ readonly park: ParkId; readonly id: string; readonly name: string; readonly lat: number; readonly lon: number }>;
+  /** Every park closed today according to its published schedule, with the next opening if known. */
+  readonly closure: { readonly next: TimeWindow | null } | null;
+  /** No park publishes its opening days: usual hours are assumed. */
+  readonly hoursUnknown: boolean;
 }
 
 /** Full live load: destination discovery, then entities, live data and schedule per park. */
@@ -355,11 +397,15 @@ export async function loadLive(fetchFn: FetchFn, def: DestinationDef, seed: Read
         getJson(fetchFn, `/entity/${enc}/live`),
         getJson(fetchFn, `/entity/${enc}/schedule`).catch(() => null),
       ]);
-      return { park, children: parseChildren(children), live: parseLive(live), hours: parseSchedule(schedule, now) };
+      const hours = parseSchedule(schedule, now);
+      const outlook = scheduleOutlook(schedule, now);
+      return { park, children: parseChildren(children), live: parseLive(live), hours, outlook, closed: !hours && outlook.known };
     }),
   );
   const entities = perPark.flatMap((p) => p.children.map((entity) => ({ park: p.park, entity })));
   const gates = parkGates(def, entities);
+  // Feeds without any position (Nigloland): the curated park centre stands in for the entrance.
+  for (const p of parks) if (!gates.has(p.park) && def.center) gates.set(p.park, def.center);
   const names = new Map(parks.map((p) => [p.park, p.name]));
   const merge = mergeCatalog(seed, entities, gates, (park) => names.get(park) ?? def.name);
   const parkInfos: ParkInfo[] = parks.flatMap((p, i) => {
@@ -368,9 +414,25 @@ export async function loadLive(fetchFn: FetchFn, def: DestinationDef, seed: Read
     return entrance ? [{ id: p.park, name: known?.name ?? p.name, short: known?.short ?? p.name, entrance, color: i }] : [];
   });
   const hours: Partial<Record<ParkId, ParkHours>> = {};
-  for (const p of perPark) if (p.hours) hours[p.park] = p.hours;
-  const snapshot = buildSnapshot(merge, perPark.flatMap((p) => p.live), hours, now, parkInfos, def);
-  if (Object.keys(snapshot.attractions).length === 0) throw new LiveDataError('Aucune donnée d’attente reçue');
+  const midnight = parkWallTime(now, 0);
+  for (const p of perPark) {
+    if (p.hours) hours[p.park] = p.hours;
+    // Closed today: an empty window, so nothing is planned and stale statuses are ignored.
+    else if (p.closed) hours[p.park] = { open: midnight, close: midnight, emh: null };
+  }
+  const built = buildSnapshot(merge, perPark.flatMap((p) => p.live), hours, now, parkInfos, def);
+  if (Object.keys(built.attractions).length === 0) throw new LiveDataError('Aucune donnée d’attente reçue');
+  const closedParks = new Set(perPark.filter((p) => p.closed).map((p) => p.park));
+  const snapshot: LiveSnapshot =
+    closedParks.size === 0
+      ? built
+      : {
+          ...built,
+          attractions: Object.fromEntries(
+            Object.entries(built.attractions).map(([id, a]) => [id, closedParks.has(merge.catalog.get(id)?.park ?? '') ? { ...a, status: 'CLOSED' as const, standby: null, singleRider: null } : a]),
+          ),
+          showtimes: Object.fromEntries(Object.entries(built.showtimes).filter(([id]) => !closedParks.has(merge.catalog.get(id)?.park ?? ''))),
+        };
   const restaurants: Array<LiveBundle['restaurants'][number]> = [];
   for (const p of perPark) {
     for (const e of p.children) {
@@ -378,5 +440,15 @@ export async function loadLive(fetchFn: FetchFn, def: DestinationDef, seed: Read
       if (pos) restaurants.push({ park: p.park, id: e.id, name: e.name, ...pos });
     }
   }
-  return { catalog: merge.catalog, snapshot, restaurants };
+  const counted = perPark.filter((p) => parkInfos.some((i) => i.id === p.park));
+  const allClosed = counted.length > 0 && counted.every((p) => p.closed);
+  const nexts = counted.map((p) => p.outlook.next).filter((w): w is TimeWindow => w !== null);
+  const next = nexts.length > 0 ? nexts.reduce((a, b) => (b.open < a.open ? b : a)) : null;
+  return {
+    catalog: merge.catalog,
+    snapshot,
+    restaurants,
+    closure: allClosed ? { next } : null,
+    hoursUnknown: counted.length > 0 && counted.every((p) => !p.hours && !p.outlook.known),
+  };
 }

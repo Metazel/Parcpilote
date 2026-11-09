@@ -1,11 +1,11 @@
 # ParcPilote
 
-Assistant de visite de parcs d'attractions : à tout moment, la meilleure prochaine étape pour le groupe, en tenant compte des temps d'attente en direct, de la marche, des spectacles choisis, des repas, du Single Rider, du Premier Access et de la Carte Facilité. Version 0.7.0.
+Assistant de visite de parcs d'attractions : à tout moment, la meilleure prochaine étape pour le groupe, en tenant compte des temps d'attente en direct, de la marche, des spectacles choisis, des repas, du Single Rider, du Premier Access et de la Carte Facilité. Version 0.8.0.
 
 | Parc | Données |
 | --- | --- |
 | Disneyland Paris (2 parcs, référentiel détaillé, démo, Heures de Magie en Plus, Carte Facilité) | En direct |
-| Parc Astérix, Europa-Park, Futuroscope, Nigloland, Walibi Rhône-Alpes, Walibi Belgium, Walibi Holland, Gardaland, Mirabilandia, PortAventura World | En direct (liste, positions, attentes, séances et horaires lus dans le flux) |
+| Parc Astérix, Europa-Park, Futuroscope, Nigloland, Walibi Rhône-Alpes, Walibi Belgium, Walibi Holland, Gardaland, Mirabilandia, PortAventura World | En direct (liste, positions, attentes, séances et horaires lus dans le flux ; parc principal seulement : sans Rulantica ni Traumatica à Europa-Park, sans Ferrari Land ni Caribe Aquatic Park à PortAventura) |
 | Puy du Fou, Parc Spirou Provence | Mode estimé : pas de flux public ; spectacles et attractions issus d'OpenStreetMap ou ajoutés par vous, attentes estimées à corriger sur place, séances, horaires, attentes et fermetures saisis ou importés depuis le programme du jour (texte copié d'une photo) |
 
 ## Ce que fait l'application
@@ -89,7 +89,7 @@ Le workflow `.github/workflows/ci.yml` vérifie, construit, teste puis publie l'
 
 | Job | Contenu |
 | --- | --- |
-| `verify` | types, lint, 135 tests unitaires, `npm audit` |
+| `verify` | types, lint, 143 tests unitaires, `npm audit` |
 | `build` | PWA (`dist/`) et fichier unique (`dist-single/`) ; artefact Pages sur `main` |
 | `e2e` | 50 scénarios Playwright (dont accessibilité RGAA), captures en artefact ; une suite en échec est rejouée une fois, les instabilités sont signalées en annotation |
 | `deploy` | publication GitHub Pages (push ou lancement manuel sur `main`) |
@@ -102,6 +102,16 @@ Dépôt : [Metazel/Parcpilote](https://github.com/Metazel/Parcpilote), avec **Se
 
 `npm run build` produit `dist/`, à déposer sur n'importe quel hébergement statique HTTPS (GitHub Pages, Netlify, Cloudflare Pages, serveur nginx). Le HTTPS est indispensable pour la géolocalisation et l'installation de la PWA. Les tuiles `tile.openstreetmap.org` conviennent à un usage personnel ; pour une diffusion large, prendre un fournisseur de tuiles avec clé (politique d'usage OSM).
 
+## Fiabilité des données réelles (0.8.0)
+
+Recette faite le 09/11/2026 sur les vrais flux ThemeParks.wiki et OpenStreetMap des 11 parcs en direct, depuis un navigateur. Constats et correctifs :
+
+- **Nigloland** : le flux ne donne aucune position, et l'application écartait donc tout le parc (« données inaccessibles »). Désormais, le centre connu du parc sert d'entrée, puis les attractions prennent leur position OpenStreetMap quand le nom correspond. Les autres restent à l'entrée.
+- **Parcs annexes** : Europa-Park mêlait Rulantica (parc aquatique) et Traumatica (événement), et PortAventura mêlait Ferrari Land et Caribe Aquatic Park, qui demandent un autre billet. Seul le parc principal est gardé.
+- **Jour de fermeture** : un parc fermé ce jour-là (calendrier publié sans ouverture aujourd'hui) n'est plus présenté comme ouvert. Un bandeau donne la prochaine ouverture, et les statuts « en service » périmés du flux sont ignorés.
+- **Horaires non publiés** (Parc Astérix, Mirabilandia, Walibi Holland au 09/11) : un bandeau indique que les horaires habituels sont supposés et renvoie au site officiel.
+- **Overpass surchargé** (erreur 502 constatée) : un téléchargement OpenStreetMap échoué est retenté au rafraîchissement suivant au lieu d'être abandonné pour la session.
+
 ## Limites connues
 
 - Hors Disneyland Paris, tailles minimales et durées ne sont pas publiées par les flux : le filtrage par taille ne s'applique pas, la durée d'une attraction est estimée à 5 min. Les aires de pique-nique viennent d'OpenStreetMap ; celles à plus de 250 m des attractions sont supposées hors du parc (retour compté). Vérifiez le règlement du parc.
@@ -113,6 +123,7 @@ Dépôt : [Metazel/Parcpilote](https://github.com/Metazel/Parcpilote), avec **Se
 - La qualité des trajets dépend de la cartographie OpenStreetMap des parcs ; une incohérence (trajet plus de 4 fois la ligne droite) est ignorée au profit de l'estimation.
 - Carte Facilité : règles reprises du fonctionnement constaté (heure de retour = attente du moment, une inscription à la fois, 5 personnes au plus). L'inscription se fait à l'attraction ; l'attente résiduelle à l'entrée Premier Access est estimée à 5 min. Le créneau est supposé valable jusqu'à la fermeture.
 - Groupe scindé : les enfants sont supposés accompagner le titulaire de la carte ; les tailles minimales s'appliquent à tout le groupe.
+- Futuroscope : le flux donne des noms en anglais et mêle les bassins de l'Aquascope aux attractions du parc ; à filtrer à la main dans Ma liste.
 - Pas de notifications en arrière-plan (exigent un serveur push), pas de partage communautaire des signalements : prévus en phase 2 avec la collecte d'historique.
 
 Application indépendante, non affiliée aux parcs proposés.
