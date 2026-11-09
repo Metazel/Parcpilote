@@ -2087,3 +2087,42 @@ textarea {
   background: var(--bad);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 22%, transparent);
 }
+
+/* 0.9.0 : préparer sa visite, imprévus */
+.day-picker {
+  max-width: 28rem;
+  margin: 0 0 16px;
+}
+
+.forecast-note {
+  margin: 0 0 16px;
+}
+
+.start-card strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.need-buttons {
+  flex-wrap: wrap;
+}
+
+.need .nearby {
+  margin-top: 12px;
+}
+
+.pause-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.pause-banner p {
+  margin: 0;
+}
+
+.kids-filter {
+  margin-top: 8px;
+}

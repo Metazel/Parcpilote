@@ -59,10 +59,14 @@ export function MapScreen({ report }: { report: (id: string) => void }) {
   const state = useAppState();
   const { catalog, snapshot, plan, persisted, pois, graph, gps, gpsAccuracyM, osm, resort } = state;
   const [layersOn, setLayersOn] = useState<ReadonlySet<Layer>>(new Set<Layer>(['rides', 'shows', 'food', 'picnic', 'toilets']));
-  const [selected, setSelected] = useState<string | null>(null);
-  const [focusId, setFocusId] = useState<string | null>(null);
+  // Opened from « Un besoin ? »: start on the route to that place.
+  const [selected, setSelected] = useState<string | null>(state.mapFocus);
+  const [focusId, setFocusId] = useState<string | null>(state.mapFocus);
   const [nearKind, setNearKind] = useState<NearbyKind>('toilets');
-  const [fitKey, setFitKeyState] = useState('initial');
+  const [fitKey, setFitKeyState] = useState(state.mapFocus ? `focus-${state.mapFocus}` : 'initial');
+  useEffect(() => {
+    if (state.mapFocus) store.setMapFocus(null);
+  }, [state.mapFocus, store]);
   const fitSeq = useRef(0);
   /** Each framing request gets a unique key, so repeating the same action re-frames. */
   const setFitKey = (kind: string) => setFitKeyState(`${kind}-${++fitSeq.current}`);

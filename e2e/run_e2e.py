@@ -550,6 +550,98 @@ def run_live(browser: Browser) -> None:
     ctx.close()
 
 
+def run_visit(browser: Browser) -> None:
+    """0.9.0 : préparer une visite à venir, imprévus pendant la visite, enfants d'abord."""
+    axe = Path(os.environ.get("AXE_PATH", ROOT / "node_modules/axe-core/axe.min.js")).read_text()
+
+    def check_axe(page: Page, where: str) -> None:
+        page.add_script_tag(content=axe)
+        res = page.evaluate("axe.run(document, { runOnly: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] })")
+        problems = [f"{v['id']} ({len(v['nodes'])}) {v['nodes'][0]['target']}" for v in res["violations"] if v["impact"] in ("serious", "critical", "moderate")]
+        assert not problems, f"{where} : " + " | ".join(problems)
+
+    ctx, page, errors = new_page(browser, live_mock=True, bypass_csp=True)
+
+    @scenario("Préparer une visite à venir : jour choisi, par où commencer, hors-ligne (RGAA)")
+    def prep():
+        page.clock.set_fixed_time(datetime(2026, 10, 22, 23, 15, tzinfo=PARIS))
+        onboard(page, child_cm=None, budget=0)
+        set_priority(page, "Peter Pan's Flight", "Incontournable")
+        set_priority(page, "Big Thunder Mountain", "Incontournable")
+        tab(page, "Maintenant")
+        page.get_by_role("button", name="Préparer ma prochaine visite").click()
+        expect(page.get_by_role("heading", level=1)).to_have_text("Plan prévisionnel : vendredi 23 octobre")
+        start = page.locator("section.start-card")
+        expect(start).to_contain_text("Soyez à l’entrée")
+        expect(start.locator("ol li").first).to_be_visible()
+        expect(page.locator(".forecast-note")).to_contain_text("Attentes estimées")
+        route = page.get_by_role("list", name="Étapes dans l'ordre")
+        expect(route).to_contain_text("Peter Pan's Flight")
+        expect(route).to_contain_text("Big Thunder Mountain")
+        assert route.get_by_role("button").count() == 0, "actions du jour affichées sur un prévisionnel"
+        check_axe(page, "prévisionnel")
+        shot(page, "23-previsionnel")
+        page.get_by_role("button", name="Préparer le hors-ligne").click()
+        expect(page.locator("#ready-title ~ p[role=status]")).to_contain_text("Prêt pour le hors-ligne")
+        page.get_by_label("Jour", exact=True).select_option(label="Aujourd’hui, en direct")
+        expect(page.get_by_role("heading", level=1)).to_have_text("Plan du jour")
+        assert not [e for e in errors if "pageerror" in e or "dialog" in e], errors
+
+    prep()
+    ctx.close()
+
+    ctx, page, errors = new_page(browser, bypass_csp=True)
+
+    @scenario("Imprévus : toilettes les plus proches, pause, « Plus tard » (RGAA)")
+    def needs():
+        onboard(page, child_cm=None, budget=0)
+        set_priority(page, "Peter Pan's Flight", "Incontournable")
+        set_priority(page, "Big Thunder Mountain", "Incontournable")
+        tab(page, "Maintenant")
+        first = sign_title(page)
+        need = page.locator("section.need")
+        need.get_by_role("button", name="Toilettes", exact=True).click()
+        expect(need.get_by_role("button", name="Toilettes", exact=True)).to_have_attribute("aria-pressed", "true")
+        expect(need.locator("ul.nearby li").first).to_contain_text("min à pied")
+        check_axe(page, "un besoin")
+        shot(page, "24-besoin-toilettes")
+        need.get_by_role("button", name=re.compile("^Itinéraire vers")).first.click()
+        expect(page.locator("path.route-focus")).to_have_count(1)
+        expect(page.locator("#sel-title")).to_have_text("Toilettes")
+        tab(page, "Maintenant")
+        need.get_by_role("button", name="Pause", exact=True).click()
+        need.get_by_role("button", name="15 min").click()
+        banner = page.locator(".pause-banner")
+        expect(banner).to_contain_text(re.compile(r"Pause jusqu’à \d\d:\d\d"))
+        page.get_by_role("button", name="Reprendre maintenant").click()
+        expect(banner).to_have_count(0)
+        page.get_by_role("button", name=re.compile("^Plus tard")).click()
+        expect(page.locator("#next-title")).not_to_have_text(first)
+        tab(page, "Plan")
+        expect(page.get_by_role("heading", name="Pour plus tard")).to_be_visible()
+        expect(page.locator("ul.reasons").filter(has_text="revient vers")).to_contain_text(first)
+        assert not [e for e in errors if "pageerror" in e or "dialog" in e], errors
+
+    @scenario("Enfants d'abord : filtre « Pour les enfants » dans Ma liste")
+    def kids():
+        page.goto(URL)
+        tab(page, "Groupe")
+        page.get_by_label("Il y a un enfant dans le groupe").check()
+        page.get_by_label("Taille du plus petit (cm)").fill("95")
+        page.get_by_role("button", name="Enregistrer", exact=True).click()
+        tab(page, "Ma liste")
+        expect(page.get_by_text("Big Thunder Mountain", exact=True).first).to_be_visible()
+        page.get_by_label("Pour les enfants").check()
+        expect(page.get_by_text("Big Thunder Mountain", exact=True)).to_have_count(0)
+        expect(page.get_by_text("Dumbo the Flying Elephant", exact=True).first).to_be_visible()
+        expect(page.locator("#kids-hint")).to_contain_text("accessibles à 95 cm")
+        check_axe(page, "filtre enfants")
+
+    needs()
+    kids()
+    ctx.close()
+
+
 def run_map(browser: Browser) -> None:
     ctx, page, errors = new_page(browser, permissions=["geolocation"], geolocation={"latitude": 48.8741, "longitude": 2.7757, "accuracy": 15})
 
@@ -1081,7 +1173,7 @@ def main() -> int:
         with sync_playwright() as p:
             # --disable-dev-shm-usage: CI containers often have a tiny /dev/shm.
             browser = p.chromium.launch(args=["--disable-dev-shm-usage"])
-            for suite in (run, run_security, run_live, run_parks, run_map, run_a11y, run_easy, run_meals, run_rgaa, run_single):
+            for suite in (run, run_security, run_live, run_parks, run_visit, run_map, run_a11y, run_easy, run_meals, run_rgaa, run_single):
                 flaky += run_suite(suite, browser)
             browser.close()
     finally:

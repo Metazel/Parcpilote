@@ -205,6 +205,36 @@ export function scheduleOutlook(json: unknown, now: number): { readonly known: b
   return { known, next };
 }
 
+/** Published opening days from today on (park date → hours, with Extra Magic Hours), at most 60. */
+export function parseOpenings(json: unknown, now: number): Map<string, ParkHours> {
+  const out = new Map<string, { open: number; close: number; emh: TimeWindow | null }>();
+  if (!isRecord(json)) return out;
+  const today = parkDateKey(now);
+  const extra = new Map<string, TimeWindow>();
+  for (const s of arr(json.schedule, 2000) ?? []) {
+    if (!isRecord(s)) continue;
+    const type = oneOf(s.type, ['OPERATING', 'EXTRA_HOURS'] as const);
+    const o = isoTime(s.openingTime);
+    const c = isoTime(s.closingTime);
+    if (!type || o === null || c === null || c <= o || c - o > 20 * 3_600_000) continue;
+    const key = parkDateKey(o);
+    if (key < today) continue;
+    if (type === 'EXTRA_HOURS') {
+      const prev = extra.get(key);
+      extra.set(key, prev ? { open: Math.min(prev.open, o), close: Math.max(prev.close, c) } : { open: o, close: c });
+      continue;
+    }
+    const prev = out.get(key);
+    if (prev) out.set(key, { ...prev, open: Math.min(prev.open, o), close: Math.max(prev.close, c) });
+    else if (out.size < 60) out.set(key, { open: o, close: c, emh: null });
+  }
+  for (const [key, h] of out) {
+    const e = extra.get(key);
+    if (e && e.open < h.open) h.emh = { open: e.open, close: Math.min(e.close, h.open) };
+  }
+  return out;
+}
+
 /** Places of a live park that the feed left at the entrance, moved to their OpenStreetMap position (same name). */
 export function placeFromSights(catalog: ReadonlyMap<string, Place>, sights: readonly CompactSight[], parks: readonly ParkInfo[]): Map<string, Place> | null {
   if (sights.length === 0) return null;
@@ -384,6 +414,14 @@ export interface LiveBundle {
   readonly closure: { readonly next: TimeWindow | null } | null;
   /** No park publishes its opening days: usual hours are assumed. */
   readonly hoursUnknown: boolean;
+  /** Published opening days from today on, oldest first (hours of each park open that day). */
+  readonly openings: readonly Opening[];
+}
+
+export interface Opening {
+  /** Park date (YYYY-MM-DD, Paris time). */
+  readonly dateKey: string;
+  readonly hours: Readonly<Partial<Record<ParkId, ParkHours>>>;
 }
 
 /** Full live load: destination discovery, then entities, live data and schedule per park. */
@@ -399,7 +437,7 @@ export async function loadLive(fetchFn: FetchFn, def: DestinationDef, seed: Read
       ]);
       const hours = parseSchedule(schedule, now);
       const outlook = scheduleOutlook(schedule, now);
-      return { park, children: parseChildren(children), live: parseLive(live), hours, outlook, closed: !hours && outlook.known };
+      return { park, children: parseChildren(children), live: parseLive(live), hours, outlook, closed: !hours && outlook.known, openings: parseOpenings(schedule, now) };
     }),
   );
   const entities = perPark.flatMap((p) => p.children.map((entity) => ({ park: p.park, entity })));
@@ -450,5 +488,22 @@ export async function loadLive(fetchFn: FetchFn, def: DestinationDef, seed: Read
     restaurants,
     closure: allClosed ? { next } : null,
     hoursUnknown: counted.length > 0 && counted.every((p) => !p.hours && !p.outlook.known),
+    openings: mergeOpenings(counted.map((p) => [p.park, p.openings] as const)),
   };
+}
+
+/** One list of opening days for the destination: a day counts when at least one park opens. */
+function mergeOpenings(perPark: ReadonlyArray<readonly [ParkId, ReadonlyMap<string, ParkHours>]>): Opening[] {
+  const days = new Map<string, Partial<Record<ParkId, ParkHours>>>();
+  for (const [park, map] of perPark) {
+    for (const [key, h] of map) {
+      const day = days.get(key) ?? {};
+      day[park] = h;
+      days.set(key, day);
+    }
+  }
+  return [...days.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : 1))
+    .slice(0, 60)
+    .map(([dateKey, hours]) => ({ dateKey, hours }));
 }

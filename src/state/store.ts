@@ -4,7 +4,8 @@ import { buildPois } from '../data/pois';
 import { curatedParks, demoSnapshot } from '../data/demo';
 import { type DestinationDef, destination } from '../data/destinations';
 import { MANUAL_WAIT_MIN, cachedCatalog, customPlaces, defParks, manualCatalog, manualSnapshot } from '../data/manual';
-import { type FetchFn, LiveDataError, type LiveBundle, loadLive, placeFromSights } from '../data/themeparks';
+import { type FetchFn, LiveDataError, type LiveBundle, type Opening, loadLive, placeFromSights } from '../data/themeparks';
+import { arrivalAdvice, dateRef, forecastSnapshot } from '../data/forecast';
 import { DETOUR_FACTOR, type NetworkFn, haversineM, walkMinutes } from '../domain/geo';
 import { type Route, WalkGraph } from '../domain/walkGraph';
 import { MAX_REPEATS, type PlanInput, computePlan, entrancesOf, wantedRides } from '../domain/planner';
@@ -73,6 +74,29 @@ export interface AppState {
   readonly osm: { readonly status: 'loading' | 'ok' | 'unavailable'; readonly fetchedAt: number | null };
   readonly graph: WalkGraph | null;
   readonly pois: readonly Poi[];
+  /** Published opening days of the destination (live parks), from today on. */
+  readonly openings: readonly Opening[];
+  /** Day shown by the Plan screen: null for today as it goes, else a day to prepare. */
+  readonly prepDate: string | null;
+  /** Place or service point the map should open on (from « Un besoin ? »). */
+  readonly mapFocus: string | null;
+}
+
+/** A day to come, as offered for preparation. */
+export interface PrepDay {
+  readonly dateKey: string;
+  /** Hours read from the park's published calendar (else usual hours, to check). */
+  readonly published: boolean;
+}
+
+/** The plan of a day to come, from its opening, with typical waits. */
+export interface Forecast {
+  readonly dateKey: string;
+  readonly published: boolean;
+  readonly snapshot: LiveSnapshot;
+  readonly plan: Plan;
+  /** When to be at the gates. */
+  readonly arriveBy: number | null;
 }
 
 /** A route to draw: along footways when the network is known, else a straight estimate. */
@@ -137,6 +161,9 @@ export class AppStore {
       osm: { status: 'loading', fetchedAt: null },
       graph: null,
       pois: [],
+      openings: [],
+      prepDate: null,
+      mapFocus: null,
     };
     this.state = { ...this.state, now: this.clockNow() };
   }
@@ -285,7 +312,7 @@ export class AppStore {
       const catalog = placeFromSights(bundle.catalog, sights, bundle.snapshot.parks) ?? new Map(bundle.catalog);
       const park = bundle.snapshot.parks[0];
       if (park) for (const p of customPlaces(this.state.persisted.custom, def.id, park)) catalog.set(p.id, p);
-      this.set({ catalog, resort: { def, parks: bundle.snapshot.parks }, data: { mode: 'live', state: 'ok', message: liveNotice(def, bundle), fetchedAt: real }, now: real });
+      this.set({ catalog, resort: { def, parks: bundle.snapshot.parks }, data: { mode: 'live', state: 'ok', message: liveNotice(def, bundle), fetchedAt: real }, now: real, openings: bundle.openings });
       this.rebuildPois();
       this.persist({
         lastLive: bundle.snapshot,
@@ -489,16 +516,18 @@ export class AppStore {
     const repeats = new Map(Object.entries(persisted.repeats));
     const doneCounts = new Map<string, number>();
     for (const id of day.done) doneCounts.set(id, (doneCounts.get(id) ?? 0) + 1);
-    // Not to plan again: skipped, shows seen, rides done as many times as wished.
+    // Not to plan again: skipped, shows seen, rides done as many times as wished, put off for later.
     const done = new Set(day.skipped);
     for (const [id, n] of doneCounts) {
       if (catalog.get(id)?.kind !== 'ride' || n >= wantedRides({ repeats }, id)) done.add(id);
     }
+    for (const [id, until] of Object.entries(day.later)) if (until > now) done.add(id);
     const pos = this.currentPosition();
     const prevFirst = this.state.plan?.steps.find((s) => s.kind !== 'easy-book');
     const forcedNextId = this.state.forcedNextId && !done.has(this.state.forcedNextId) ? this.state.forcedNextId : undefined;
     const input: PlanInput = {
-      now,
+      // During a break, the plan starts when it ends.
+      now: day.pauseUntil !== null && day.pauseUntil > now ? day.pauseUntil : now,
       position: pos,
       positionKey: pos.key,
       catalog,
@@ -747,7 +776,30 @@ export class AppStore {
 
   restore(targetId: string): void {
     const { day } = this.state.persisted;
-    this.patchDay({ skipped: day.skipped.filter((id) => id !== targetId), done: day.done.filter((id) => id !== targetId) });
+    const later = { ...day.later };
+    delete later[targetId];
+    this.patchDay({ skipped: day.skipped.filter((id) => id !== targetId), done: day.done.filter((id) => id !== targetId), later });
+    this.recompute();
+  }
+
+  /** "Plus tard": the ride or show leaves the plan for a while, then comes back by itself. */
+  postpone(targetId: string, minutes = 60): void {
+    if (!this.state.catalog.has(targetId) || !Number.isInteger(minutes) || minutes < 10 || minutes > 180) return;
+    const { day } = this.state.persisted;
+    this.patchDay({ later: { ...day.later, [targetId]: this.state.now + minutes * MINUTE } });
+    this.set({ forcedNextId: null, plan: this.planWithout((s) => s.targetId === targetId) });
+    this.recompute();
+  }
+
+  /** Unforeseen break (toilets, rest, a child's nap…): the plan starts again after it. */
+  pause(minutes: number): void {
+    if (!Number.isInteger(minutes) || minutes < 5 || minutes > 120) return;
+    this.patchDay({ pauseUntil: this.state.now + minutes * MINUTE });
+    this.recompute();
+  }
+
+  resume(): void {
+    this.patchDay({ pauseUntil: null });
     this.recompute();
   }
 
@@ -875,6 +927,9 @@ export class AppStore {
       gps: null,
       graph: null,
       pois: [],
+      openings: [],
+      prepDate: null,
+      mapFocus: null,
       osm: { status: 'loading', fetchedAt: null },
       data: { mode: next.live ? 'live' : 'manual', state: 'loading', message: null, fetchedAt: null },
       now: this.deps.realNow(),
@@ -1010,6 +1065,87 @@ export class AppStore {
     this.set({ catalog });
     this.manualTick(true);
     return applied;
+  }
+
+  /** Days that can be prepared: published opening days, else the next two weeks (usual hours). */
+  prepDays(): PrepDay[] {
+    const now = this.state.now;
+    const today = parkDateKey(now);
+    const known = this.state.openings.filter((o) => o.dateKey > today || (o.dateKey === today && Object.values(o.hours).some((h) => h && now < h.open)));
+    if (known.length > 0) return known.slice(0, 30).map((o) => ({ dateKey: o.dateKey, published: true }));
+    const out: PrepDay[] = [];
+    for (let i = 1; i <= 14; i++) out.push({ dateKey: parkDateKey(dateRef(today) + i * 24 * 60 * MINUTE), published: false });
+    return out;
+  }
+
+  /** Asks the map to open on a place or service point (null: done). */
+  setMapFocus(id: string | null): void {
+    if (id !== null && !this.state.catalog.has(id) && !this.state.pois.some((p) => p.id === id)) return;
+    this.set({ mapFocus: id });
+  }
+
+  /** Nearest service points of a kind, by walking time from the group. */
+  nearest(kind: Poi['kind'], count = 3): Array<{ readonly poi: Poi; readonly min: number }> {
+    return this.state.pois
+      .filter((p) => p.kind === kind)
+      .map((poi) => ({ poi, min: this.walkMinutesTo(poi) }))
+      .sort((a, b) => a.min - b.min)
+      .slice(0, count);
+  }
+
+  /** Chooses the day shown by the Plan screen (null: today, live). */
+  setPrepDate(dateKey: string | null): void {
+    if (dateKey !== null && !/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return;
+    this.set({ prepDate: dateKey });
+  }
+
+  /**
+   * Plan of a day to come, from the gates at opening, with typical waits. Pure preview: the
+   * day in progress (done, skipped, position, meals taken) is neither read nor changed.
+   */
+  async forecast(dateKey: string): Promise<Forecast | null> {
+    const { persisted, catalog, resort } = this.state;
+    const profile = persisted.profile;
+    if (!profile || !/^\d{4}-\d{2}-\d{2}$/.test(dateKey) || resort.parks.length === 0) return null;
+    const opening = this.state.openings.find((o) => o.dateKey === dateKey) ?? null;
+    const snapshot = forecastSnapshot(this.def, catalog, resort.parks, dateKey, opening?.hours ?? null);
+    const park = snapshot.parks.find((p) => p.id === profile.startPark) ?? snapshot.parks[0];
+    if (!park) return null;
+    const emhAccess = profile.emhAccess && this.def.features.emh;
+    const input: PlanInput = {
+      now: snapshot.fetchedAt,
+      position: { ...park.entrance, park: park.id },
+      positionKey: `gate-${park.id}`,
+      catalog,
+      snapshot,
+      profile: { ...profile, easyAccess: profile.easyAccess && this.def.features.easyAccess, emhAccess },
+      wishes: new Map<string, Priority>(persisted.wishes),
+      repeats: new Map(Object.entries(persisted.repeats)),
+      shows: [],
+      paBookings: [],
+      done: new Set(),
+      lunchDone: false,
+      dinnerDone: false,
+      mealPlaces: this.state.pois.filter((p) => p.kind === 'food' || p.kind === 'picnic'),
+      // Same places as today, without today's table reservations.
+      mealPicks: Object.fromEntries(Object.entries(persisted.day.meals).map(([slot, pick]) => [slot, { ...pick, reservationAt: null }])),
+      reentryMin: this.def.dining.reentryMin,
+      corrections: {},
+      easyAccessReservation: null,
+    };
+    const plan = await (this.deps.planner ? this.deps.planner.plan(input).catch(() => computePlan({ ...input, network: this.network() })) : Promise.resolve(computePlan({ ...input, network: this.network() })));
+    return { dateKey, published: opening !== null, snapshot, plan, arriveBy: arrivalAdvice(snapshot, emhAccess) };
+  }
+
+  /** Downloads what a visit needs without network (walkways, services); true when ready. */
+  async prepareOffline(): Promise<{ readonly paths: boolean; readonly list: boolean }> {
+    if (this.state.osm.status !== 'ok') {
+      this.osmDest = '';
+      await this.loadOsm();
+    }
+    const cache = this.state.persisted.catalogCache;
+    const list = this.def.parks.length > 0 || (cache !== null && cache.dest === this.def.id && cache.places.length > 0);
+    return { paths: this.state.osm.status === 'ok', list };
   }
 
   resetDay(): void {
